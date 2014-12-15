@@ -62,7 +62,7 @@ class ServerThread
 			sendUTPpkt.dstPort = recvUTPpkt.dstPort;
 			sendUTPpkt.sn = recvUTPpkt.sn;
 			sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
-			sendUTPpkt.payl = new String("ACK of SN=" + sendUTPpkt.sn).getBytes();
+			sendUTPpkt.payl = new String("").getBytes();
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 			
 			

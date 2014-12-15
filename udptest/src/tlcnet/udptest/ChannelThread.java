@@ -8,19 +8,23 @@ import java.net.SocketException;
 import java.util.Arrays;
 
 public class ChannelThread {
+	private static final double FIXED_DROP_PROB = 0.15;  // TODO: temporary
+	private static final int MIN_DELAY_MS = 10;  // TODO: temporary
+	private static final int MAX_DELAY_MS = 60;  // TODO: temporary
+	
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	private static final int INVALID_PORT = -1;
 	//private InetAddress currClientAddr = null;
 	//private int currClientPort = INVALID_PORT;
 	private int listenPort = INVALID_PORT;
 	
-	public ChannelThread(int listenPort) {
+	public ChannelThread(int listenPort)  {
 		super();
 		this.listenPort = listenPort; // local port to listen on
 		run();
 	}
 	
-	private void run() {
+	private void run()  {
 
 		// --- Create client-side and server-side sockets ---
 		
@@ -49,7 +53,15 @@ public class ChannelThread {
 		}
 	}
 
-	
+	// For now it's just a Bernoulli
+	private boolean mustDrop(int length) {
+		if (length == 0)
+			return false;
+		if (Math.random() < FIXED_DROP_PROB)
+			return true;
+		return false;
+	}
+
 	private void forward(DatagramSocket srcSock, DatagramSocket dstSock) {
 		
 		// ---- Receive packet ----
@@ -90,6 +102,14 @@ public class ChannelThread {
 		
 		
 		// ---- Send packet ----
+		if (mustDrop(sendUTPpkt.payl.length))
+			return;
+		try {
+			Thread.sleep(getRndDelay());
+		} catch (InterruptedException e1) {
+			// TODO Auto-generated catch block
+			//e1.printStackTrace();
+		}
 		DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
 		try {
 			dstSock.send(sendPkt);
@@ -98,6 +118,11 @@ public class ChannelThread {
 			System.err.println("I/O error while sending datagram:\n" + e);
 			dstSock.close(); srcSock.close(); System.exit(-1);
 		}
+	}
+
+	private long getRndDelay() {
+		// TODO This is an uniform distribution!
+		return Math.round(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS) + MIN_DELAY_MS);
 	}
 	
 	
