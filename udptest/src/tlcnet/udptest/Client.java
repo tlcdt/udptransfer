@@ -8,14 +8,14 @@ public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	//private static final short TIMEOUT = 500; TODO
-	private static final short DEF_DSTPORT = 9878;
-	private static final short DEF_CHANPORT = 9879;
+	private static final int DEF_DSTPORT = 9878;
+	private static final int DEF_CHANNEL_PORT = 65432;
 	
 	
 	public static void main(String args[])  
 	{
-		short channelPort = DEF_CHANPORT;
-		short dstPort = DEF_DSTPORT;
+		int channelPort = DEF_CHANNEL_PORT;
+		int dstPort = DEF_DSTPORT;
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
@@ -67,7 +67,7 @@ public class Client
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.sn = sn;
 			sendUTPpkt.dstAddr = dstAddr;
-			sendUTPpkt.dstPort = dstPort;
+			sendUTPpkt.dstPort = (short)dstPort;
 			sendUTPpkt.payl = sndStr.getBytes();
 			
 			// --- Send UDP datagram ---

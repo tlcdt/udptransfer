@@ -8,14 +8,12 @@ import java.net.SocketException;
 import java.util.Arrays;
 
 public class ChannelThread {
-	private static final double FIXED_DROP_PROB = 0.15;  // TODO: temporary
+	private static final double FIXED_DROP_PROB = 0.12;  // TODO: temporary
 	private static final int MIN_DELAY_MS = 10;  // TODO: temporary
 	private static final int MAX_DELAY_MS = 60;  // TODO: temporary
 	
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	private static final int INVALID_PORT = -1;
-	//private InetAddress currClientAddr = null;
-	//private int currClientPort = INVALID_PORT;
 	private int listenPort = INVALID_PORT;
 	
 	public ChannelThread(int listenPort)  {
@@ -28,28 +26,27 @@ public class ChannelThread {
 
 		// --- Create client-side and server-side sockets ---
 		
-		DatagramSocket cliSocket = null;
-		DatagramSocket srvSocket = null;
+		DatagramSocket listenSocket = null;
+		DatagramSocket outSocket = null;
 		try {
-			cliSocket = new DatagramSocket(listenPort);
+			listenSocket = new DatagramSocket(listenPort);
 		}
 		catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
 		}
 		try {
-			srvSocket = new DatagramSocket(); // any available local port
+			outSocket = new DatagramSocket(); // any available local port
 		}
 		catch (SocketException e) {
 			System.err.println("Error creating a datagram socket:\n" + e);
-			cliSocket.close(); System.exit(-1);
+			listenSocket.close(); System.exit(-1);
 		}
 		
 		
 		// ---- MAIN LOOP ----
 		while(true) {
-			forward(cliSocket, srvSocket);
-			forward(srvSocket, cliSocket);
+			forward(listenSocket, outSocket);
 		}
 	}
 
@@ -105,9 +102,8 @@ public class ChannelThread {
 		if (mustDrop(sendUTPpkt.payl.length))
 			return;
 		try {
-			Thread.sleep(getRndDelay());
-		} catch (InterruptedException e1) {
-			// TODO Auto-generated catch block
+			Thread.sleep(getRndDelay()); // TODO: WRONG.
+		} catch (InterruptedException e) {
 			//e1.printStackTrace();
 		}
 		DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);

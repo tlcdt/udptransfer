@@ -9,11 +9,13 @@ import java.util.Arrays;
 
 class ServerThread
 {
+	private static final int DEF_CHANNEL_PORT = 65432;
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	private static final int INVALID_PORT = -1;
 	//private InetAddress currRemoteAddr = null;
 	//private int currRemotePort = INVALID_PORT;
 	private int listenPort = INVALID_PORT;
+	private int channelPort = DEF_CHANNEL_PORT;
 
 	public ServerThread(int listenPort) {
 		super();
@@ -55,14 +57,13 @@ class ServerThread
 			recvData = Arrays.copyOf(recvData, recvPkt.getLength());  // (truncate unused buffer)
 			UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse payload
 			InetAddress channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
-			int channelPort = recvPkt.getPort();
 			
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.dstAddr = recvUTPpkt.dstAddr;
 			sendUTPpkt.dstPort = recvUTPpkt.dstPort;
 			sendUTPpkt.sn = recvUTPpkt.sn;
 			sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
-			sendUTPpkt.payl = new String("").getBytes();
+			sendUTPpkt.payl = new String("").getBytes(); // TODO: ugly
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 			
 			
