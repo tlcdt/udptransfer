@@ -7,15 +7,18 @@ import java.util.Arrays;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
-	private static final short ACK_TIMEOUT = 700;
-	private static final int DEF_DSTPORT = 9878;
+	private static final short ACK_TIMEOUT = 1000;
 	private static final int DEF_CHANNEL_PORT = 65432;
+	private static final int DEF_CLIENT_PORT = 65431;
+	 // The client port needs to be standardized even in a client/server architecture,
+	 //  for compatibility with evil stuff such as NAT.
+	
 	
 	
 	public static void main(String args[])  
 	{
 		int channelPort = DEF_CHANNEL_PORT;
-		int dstPort = DEF_DSTPORT;
+		int dstPort = Server.DEF_SERVER_PORT;
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
@@ -29,7 +32,7 @@ public class Client
 		// ---- Create stdin reader and socket ----
 		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
 		try {
-			socket = new DatagramSocket(); // any available local port
+			socket = new DatagramSocket(DEF_CLIENT_PORT);
 			socket.setSoTimeout(ACK_TIMEOUT);
 		}
 		catch (SocketException e) {
