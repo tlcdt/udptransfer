@@ -8,23 +8,23 @@ import java.net.SocketException;
 import java.util.Arrays;
 
 public class ChannelThread {
-	private static final double FIXED_DROP_PROB = 0.12;  // TODO: temporary
-	private static final int MIN_DELAY_MS = 10;  // TODO: temporary
-	private static final int MAX_DELAY_MS = 60;  // TODO: temporary
+	private static final double FIXED_DROP_PROB = 0.25;  // TODO: temp probability and delay
+	private static final int MIN_DELAY_MS = 10;
+	private static final int MAX_DELAY_MS = 60;
 	
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	private static final int INVALID_PORT = -1;
 	private int listenPort = INVALID_PORT;
 	
-	public ChannelThread(int listenPort)  {
+	public ChannelThread(int listenPort) {
 		super();
 		this.listenPort = listenPort; // local port to listen on
 		run();
 	}
 	
-	private void run()  {
+	private void run() {
 
-		// --- Create client-side and server-side sockets ---
+		// --- Create listen and send sockets ---
 		
 		DatagramSocket listenSocket = null;
 		DatagramSocket outSocket = null;
@@ -50,14 +50,6 @@ public class ChannelThread {
 		}
 	}
 
-	// For now it's just a Bernoulli
-	private boolean mustDrop(int length) {
-		if (length == 0)
-			return false;
-		if (Math.random() < FIXED_DROP_PROB)
-			return true;
-		return false;
-	}
 
 	private void forward(DatagramSocket srcSock, DatagramSocket dstSock) {
 		
@@ -83,11 +75,16 @@ public class ChannelThread {
 		int srcPort = recvPkt.getPort();
 		
 		UTPpacket sendUTPpkt = new UTPpacket();	// Create new UTP packet (it will be the payload of the datagram)
-		sendUTPpkt.dstAddr = srcAddr; 			// Destination address (and port) from the destination POV: now,
-		sendUTPpkt.dstPort = (short)srcPort;	//  for the channel, it's the addr (and port) of the sender.
 		sendUTPpkt.function = recvUTPpkt.function;
 		sendUTPpkt.sn = recvUTPpkt.sn;
 		sendUTPpkt.payl = recvUTPpkt.payl;
+		 // - The following two lines are needed only to notify the TRUE sender (DS or DR) to the
+		 //   receiver (DR or DS); for other implementations of DR they are harmless.
+		 //   Anyway, our DR will not be compatible with a Channel implemented without these lines.
+		 //	  TODO What should we do? 
+		sendUTPpkt.dstAddr = srcAddr; 			// Destination address (and port) from the destination POV: now,
+		sendUTPpkt.dstPort = (short)srcPort;	//  for the channel, it's the addr (and port) of the sender.
+		 // - - - - - -
 		byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 		
 		//DEBUG
@@ -99,8 +96,9 @@ public class ChannelThread {
 		
 		
 		// ---- Send packet ----
-		if (mustDrop(sendUTPpkt.payl.length))
-			return;
+		if (mustDrop(sendUTPpkt.payl.length)) {
+			System.out.println("Dropping packet SN=" + recvUTPpkt.sn + " towards " + dstAddr.getHostAddress());return;
+		}
 		try {
 			Thread.sleep(getRndDelay()); // TODO: WRONG.
 		} catch (InterruptedException e) {
@@ -115,6 +113,18 @@ public class ChannelThread {
 			dstSock.close(); srcSock.close(); System.exit(-1);
 		}
 	}
+	
+
+	// TODO: For now it's just a Bernoulli
+	private boolean mustDrop(int length) {
+		if (length == 0)
+			return false; // TODO: for now empty packets are always passed on
+		if (Math.random() < FIXED_DROP_PROB)
+			return true;
+		return false;
+	}
+
+	
 
 	private long getRndDelay() {
 		// TODO This is an uniform distribution!
