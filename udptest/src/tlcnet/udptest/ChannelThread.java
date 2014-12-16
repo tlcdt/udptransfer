@@ -10,12 +10,8 @@ import java.util.Random;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-public class ChannelThread {
-	private static final double FIXED_DROP_PROB = 0.25;  // TODO: temp probability and delay
-	private static final int MIN_DELAY_MS = 10;
-	private static final int MAX_DELAY_MS = 60;
-	
-	private static final int CORE_POOL_SIZE = 50;
+public class ChannelThread {	
+	private static final int CORE_POOL_SIZE = 50; // TODO: check this
 	
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 	private static final int INVALID_PORT = -1;
@@ -92,10 +88,9 @@ public class ChannelThread {
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 			
 			//DEBUG
-			System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
-			
+			//System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
 			System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
-							+ "): " + new String(recvUTPpkt.payl) + "\n");
+							+ "): " + new String(recvUTPpkt.payl));
 
 			
 			
@@ -106,14 +101,17 @@ public class ChannelThread {
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
-			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), getRndDelay(sendData.length), TimeUnit.MILLISECONDS);
+			// Execute thread that sends packet after a random time
+			long rndDelay = getRndDelay(sendData.length);
+			System.out.println("Delay=" + rndDelay + " ms");
+			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
 
 		}
 	}
 	
 	
-	private class SendDelayedPacket implements Runnable {
-		
+	private class SendDelayedPacket implements Runnable
+	{
 		private DatagramSocket dstSock;
 		private DatagramSocket srcSock;
 		private DatagramPacket sendPkt;
@@ -139,9 +137,10 @@ public class ChannelThread {
         }
     }
 
+	
 
 	private boolean mustDrop(int length) {
-		double discard_prob = 1 - Math.exp(-length/(double)1024);
+		double discard_prob = 1 - Math.exp(-length/(double)1024); // TODO: too low for testing
 		boolean discard = new Random().nextDouble() <= discard_prob;
 		return discard;
 	}

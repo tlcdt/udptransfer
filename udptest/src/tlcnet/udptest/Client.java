@@ -7,7 +7,7 @@ import java.util.Arrays;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
-	private static final short ACK_TIMEOUT = 1000;
+	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432;
 	private static final int DEF_CLIENT_PORT = 65431;
 	 // The client port needs to be standardized even in a client/server architecture,
