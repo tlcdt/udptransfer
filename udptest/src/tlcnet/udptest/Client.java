@@ -80,6 +80,7 @@ public class Client
 			while (!acked) {
 				// --- Send UDP datagram ---
 				try {
+					System.out.println("Sending SN=" + sn);
 					socket.send(sndPkt);
 				}
 				catch(IOException e) {
@@ -110,7 +111,7 @@ public class Client
 				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
 					System.out.println("!Not an ACK");
 				else if (recvUTPpkt.sn != sn)
-					System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + ")");
+					System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
 				else
 					acked = true;
 
