@@ -6,6 +6,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.util.Arrays;
+import java.util.Random;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -105,7 +106,7 @@ public class ChannelThread {
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
-			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), getRndDelay(), TimeUnit.MILLISECONDS);
+			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), getRndDelay(sendData.length), TimeUnit.MILLISECONDS);
 
 		}
 	}
@@ -139,20 +140,18 @@ public class ChannelThread {
     }
 
 
-	// TODO: For now it's just a Bernoulli
 	private boolean mustDrop(int length) {
-		if (length == 0)
-			return false; // TODO: for now empty packets (for instance ACKs) are always passed on
-		if (Math.random() < FIXED_DROP_PROB)
-			return true;
-		return false;
+		double discard_prob = 1 - Math.exp(-length/(double)1024);
+		boolean discard = new Random().nextDouble() <= discard_prob;
+		return discard;
 	}
 
 	
 
-	private long getRndDelay() {
-		// TODO This is an uniform distribution!
-		return Math.round(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS) + MIN_DELAY_MS);
+	private long getRndDelay(int length) {
+		double mean = 1024/Math.log((double) length);
+		double delay = -Math.log(new Random().nextDouble()) * mean;
+		return Math.round(delay);
 	}
 	
 	
