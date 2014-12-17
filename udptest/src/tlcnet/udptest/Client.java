@@ -3,6 +3,8 @@ package tlcnet.udptest;
 import java.io.*;
 import java.net.*;
 import java.util.Arrays;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 
 public class Client
 {
@@ -22,15 +24,13 @@ public class Client
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
-		String sndStr = null;
 		
 		if (args.length != 3) {
 		    System.out.println("Usage: java Client <dest address> <channel address> <local file>"); //unused
 		    return;
 		}
 		
-		// ---- Create stdin reader and socket ----
-		BufferedReader inFromUser = new BufferedReader(new InputStreamReader(System.in));
+		// ---- Create socket ----
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
 			socket.setSoTimeout(ACK_TIMEOUT);
@@ -55,78 +55,92 @@ public class Client
 		// *** MAIN LOOP ***
 			
 		int sn = 1;
-		while(true) {
-			
-			// --- Read string from stdin ---
-			try {
-				sndStr = inFromUser.readLine();
-			}
-			catch(IOException e) {
-				System.err.println("I/O error while reading input from user");
-				socket.close();
-				return;
-			}
-			
-			// --- Assemble packet (UDP payload) ---
-			UTPpacket sendUTPpkt = new UTPpacket();
-			sendUTPpkt.sn = sn;
-			sendUTPpkt.dstAddr = dstAddr;
-			sendUTPpkt.dstPort = (short)dstPort;
-			sendUTPpkt.payl = sndStr.getBytes();
-			byte[] sendData = sendUTPpkt.getRawData();
-			DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
-
-			boolean acked = false;
-			while (!acked) {
-				// --- Send UDP datagram ---
-				try {
-					System.out.println("Sending SN=" + sn);
-					socket.send(sndPkt);
-				}
-				catch(IOException e) {
-					System.err.println("I/O error while sending datagram");
-					socket.close();
-					return;
+		RandomAccessFile theFile;
+		try	{
+			String fileName = args[2];
+			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader TODO: fix the warning
+		}
+		catch(FileNotFoundException e)	{
+			System.out.println("Error: file not found");
+			socket.close();
+			return;
+		}
+		FileChannel inChannel = theFile.getChannel();
+		ByteBuffer chunkContainer = ByteBuffer.allocate(512);
+		
+		try	{
+			while(inChannel.read(chunkContainer) > 0) {
+				
+				// --- Read chunk of file from buffer ---
+				chunkContainer.flip();	//Important! Otherwise .remaining() method gives 0
+				byte[] bytes = new byte[chunkContainer.remaining()];
+			    chunkContainer.get(bytes, 0, bytes.length);
+				chunkContainer.clear();
+				
+				// --- Assemble packet (UDP payload) ---
+				UTPpacket sendUTPpkt = new UTPpacket();
+				sendUTPpkt.sn = sn;
+				sendUTPpkt.dstAddr = dstAddr;
+				sendUTPpkt.dstPort = (short)dstPort;
+				sendUTPpkt.payl = bytes;	//Directly obtained from chunkContainer
+				byte[] sendData = sendUTPpkt.getRawData();
+				DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
+	
+				boolean acked = false;
+				while (!acked) {
+					// --- Send UDP datagram ---
+					try {
+						System.out.println("Sending SN=" + sn);
+						socket.send(sndPkt);
+					}
+					catch(IOException e) {
+						System.err.println("I/O error while sending datagram");
+						socket.close();
+						return;
+					}
+		
+					// ---- Receive packet ----
+					byte[] recvBuf = new byte[RX_BUFSIZE];
+					DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
+					try{
+						socket.receive(recvPkt);
+					}
+					catch (SocketTimeoutException e) {
+						System.out.println("!ACK not received for SN=" + sn + "\nRetransmitting");
+						continue;
+					}
+					catch(IOException e) {
+						System.err.println("I/O error while receiving datagram:\n" + e);
+						socket.close(); System.exit(-1);
+					}
+					
+					// ---- Process received packet ----
+					byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
+					recvData = Arrays.copyOf(recvData, recvPkt.getLength());
+					UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
+					if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
+						System.out.println("!Not an ACK");
+					else if (recvUTPpkt.sn != sn)
+						System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
+					else
+						acked = true;
+	
+					//DEBUG
+					System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
+	
+					System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
+							+ "): " + new String(recvUTPpkt.payl) + "\n");
 				}
 	
-				// ---- Receive packet ----
-				byte[] recvBuf = new byte[RX_BUFSIZE];
-				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-				try{
-					socket.receive(recvPkt);
-				}
-				catch (SocketTimeoutException e) {
-					System.out.println("!ACK not received for SN=" + sn + "\nRetransmitting");
-					continue;
-				}
-				catch(IOException e) {
-					System.err.println("I/O error while receiving datagram:\n" + e);
-					socket.close(); System.exit(-1);
-				}
 				
-				// ---- Process received packet ----
-				byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
-				recvData = Arrays.copyOf(recvData, recvPkt.getLength());
-				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
-				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
-					System.out.println("!Not an ACK");
-				else if (recvUTPpkt.sn != sn)
-					System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
-				else
-					acked = true;
-
-				//DEBUG
-				System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
-
-				System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
-						+ "): " + new String(recvUTPpkt.payl) + "\n");
+				// Increase counter
+				sn++;
 			}
-
-			
-			
-			
-			// Increase counter
-			sn++;
+			inChannel.close();
+			theFile.close();
+		}
+		catch(IOException e)	{
+			System.out.println("IO error occurred while reading from file");
 		}
 	}
 }
