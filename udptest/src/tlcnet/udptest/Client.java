@@ -142,5 +142,54 @@ public class Client
 		catch(IOException e)	{
 			System.out.println("IO error occurred while reading from file");
 		}
+		
+		// Send FIN packet
+		
+		UTPpacket sendUTPpkt = new UTPpacket();
+		sendUTPpkt.sn = sn;
+		sendUTPpkt.dstAddr = dstAddr;
+		sendUTPpkt.dstPort = (short)dstPort;
+		sendUTPpkt.payl = new byte[0];	
+		sendUTPpkt.function = UTPpacket.FUNCT_FIN;
+		byte[] sendData = sendUTPpkt.getRawData();
+		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
+		
+		boolean acked = false;
+		while (!acked) {
+			// --- Wait for ack ---
+			try {
+				System.out.println("Sending FIN");
+				socket.send(sndPkt);
+			}
+			catch(IOException e) {
+				System.err.println("I/O error while sending FIN packet");
+				socket.close();
+				return;
+			}
+			
+			byte[] recvBuf = new byte[RX_BUFSIZE];
+			DatagramPacket recvFin = new DatagramPacket(recvBuf, recvBuf.length);
+			try{
+				socket.receive(recvFin);
+			}
+			catch (SocketTimeoutException e) {
+				System.out.println("!ACK not received for FIN: \nRetransmitting");
+				continue;
+			}
+			catch(IOException e) {
+				System.err.println("I/O error while receiving FIN packet:\n" + e);
+				socket.close(); System.exit(-1);
+			}
+			
+			// ---- Process received packet ----
+			byte[] recvData = recvFin.getData();				// payload of recv UDP datagram
+			recvData = Arrays.copyOf(recvData, recvFin.getLength());
+			UTPpacket recvUTPpktFin = new UTPpacket(recvData);		// parse UDP payload
+			if (recvUTPpktFin.function != UTPpacket.FUNCT_FIN)
+				System.out.println("!Not FIN");
+			else
+				acked = true;
+				System.out.println("Yay. Transmition complete. Have fun while I stay here doing absolutely nothing. Merry Christmas :(");
+		}
 	}
 }

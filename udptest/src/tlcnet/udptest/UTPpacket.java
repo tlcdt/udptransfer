@@ -14,6 +14,8 @@ public class UTPpacket {
 	static final int FUNCT_SNDDATA = 2;
 	static final int FUNCT_ACKREQ  = 9;
 	static final int FUNCT_ACKDATA = 10;
+	static final int FUNCT_FIN = 42;
+	static final int FUNCT_ACKFIN = 43;
 	
 	static final int DSTADDR_START  = 0;  // 4
 	static final int DSTADDR_END    = 3;
