@@ -13,12 +13,12 @@ import java.util.concurrent.TimeUnit;
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
 	private static final int CORE_POOL_SIZE = 50; // TODO: check this
-	
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 
 	
 	public static void main(String[] args) {
 		int listenPort = DEF_CHANNEL_RCV_PORT;
+		
 		// --- Create listen and send sockets ---
 		
 		DatagramSocket listenSocket = null;
@@ -38,13 +38,12 @@ public class Channel {
 			listenSocket.close(); System.exit(-1);
 		}
 
-		
+		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE); //TODO Check if threads close. Should this be inside the loop?
+
 		
 		// * * * *  MAIN LOOP  * * * *
 		
 		while(true) {
-			
-			ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
 			
 			
 			// ---- Receive packet ----
@@ -62,36 +61,21 @@ public class Channel {
 			// ---- Process received packet and prepare new packet ----
 			byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
 			recvData = Arrays.copyOf(recvData, recvPkt.getLength());
-			UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
-			InetAddress dstAddr = recvUTPpkt.dstAddr;			// get intended dest address and port
-			int dstPort = (int)recvUTPpkt.dstPort & 0xffff;
-			InetAddress srcAddr = recvPkt.getAddress();			// get sender address and port (UDP header)
-			int srcPort = recvPkt.getPort();
-			
-			UTPpacket sendUTPpkt = new UTPpacket();	// Create new UTP packet (it will be the payload of the datagram)
-			sendUTPpkt.function = recvUTPpkt.function;
-			sendUTPpkt.sn = recvUTPpkt.sn;
-			sendUTPpkt.payl = recvUTPpkt.payl;
-			 // - The following two lines are needed only to notify the TRUE sender (DS or DR) to the
-			 //   receiver (DR or DS); for other implementations of DR they are harmless.
-			 //   Anyway, our DR will not be compatible with a Channel implemented without these lines.
-			 //	  TODO What should we do? 
-			sendUTPpkt.dstAddr = srcAddr; 			// Destination address (and port) from the destination POV: now,
-			sendUTPpkt.dstPort = (short)srcPort;	//  for the channel, it's the addr (and port) of the sender.
-			 // - - - - - -
-			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
+			UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
+			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
+			int dstPort = (int)utpPkt.dstPort & 0xffff;
+			byte[] sendData = recvData; // useless but clear
 			
 			//DEBUG
-			//System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
-			System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
-							+ "): " + new String(recvUTPpkt.payl));
+			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
 
 			
 			
 			// ---- Send packet ----
 			
-			if (mustDrop(sendUTPpkt.payl.length)) {
-				System.out.println("Dropping packet SN=" + recvUTPpkt.sn + " towards " + dstAddr.getHostAddress());
+			if (mustDrop(utpPkt.payl.length)) {
+				System.out.println("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);

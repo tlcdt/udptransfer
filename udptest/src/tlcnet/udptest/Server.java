@@ -6,23 +6,32 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 
 public class Server {
+	static final int DEF_CLIENT_PORT = 65431;
 	static final int DEF_CHANNEL_PORT = 65432;
-	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks...ugly!
 	static final int DEF_SERVER_PORT = 65433;
+	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks...ugly!
 	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
 
 	public static void main(String[] args) {
-		
-		if (args.length != 1) {
-		    System.out.println("Usage: java Client <complete path to new file>. E.g.: /home/user/workspace/file.extention"); //unused
-		    return;
-		}
-		// Create the socket
 		int listenPort = DEF_SERVER_PORT;
 		int channelPort = DEF_CHANNEL_PORT;
+		InetAddress clientAddr = null;
+		
+		if (args.length != 2) {
+		    System.out.println("Usage: java Client <client address> <path to new file>\nExample: Client /home/user/workspace/filename"); //unused
+		    return;
+		}
+		try {
+			clientAddr = InetAddress.getByName(args[0]);
+		} catch (UnknownHostException e) {
+			System.err.println(e); return;
+		}
+		
+		// Create the socket
 		DatagramSocket socket = null;
 		try {
 			socket = new DatagramSocket(listenPort);
@@ -67,20 +76,20 @@ public class Server {
 			InetAddress channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
 
 			UTPpacket sendUTPpkt = new UTPpacket();
-			sendUTPpkt.dstAddr = recvUTPpkt.dstAddr;
-			sendUTPpkt.dstPort = recvUTPpkt.dstPort;
+			sendUTPpkt.dstAddr = clientAddr;
+			sendUTPpkt.dstPort = (short) DEF_CLIENT_PORT;
 			sendUTPpkt.sn = recvUTPpkt.sn;
 			sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
-			sendUTPpkt.payl = new String("").getBytes(); // TODO: ugly
+			sendUTPpkt.payl = new byte[0];
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 
 
 
 
 			//DEBUG
-			System.out.println("\n------RECV DATA:\n" + Utils.byteArr2str(recvData));
-			System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
-					+ "): " + new String(recvUTPpkt.payl) + "\n");
+			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+
 			
 			
 			
@@ -104,10 +113,11 @@ public class Server {
 				socket.close(); System.exit(-1);
 			}
 		}
-		//Copy file to given directory
+		
+		// --- Copy file to given directory ---
 		byte[] finalData = outputStream.toByteArray();
 		
-		String newFile = args[0];
+		String newFile = args[1];
 		try (FileOutputStream fos = new FileOutputStream(newFile)) {
 		    fos.write(finalData);
 		} catch (IOException ioe) {
