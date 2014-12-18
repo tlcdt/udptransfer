@@ -32,7 +32,6 @@ public class Client
 		// ---- Create socket ----
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
-			socket.setSoTimeout(ACK_TIMEOUT);
 		}
 		catch (SocketException e) {
 			System.err.println("Error creating datagram socket:\n" + e);
@@ -50,10 +49,6 @@ public class Client
 			socket.close();	return;
 		}
 
-
-		// *** MAIN LOOP ***
-
-		int sn = 1;
 		RandomAccessFile theFile = null;
 		try	{
 			String fileName = args[2];
@@ -67,7 +62,14 @@ public class Client
 		FileChannel inChannel = theFile.getChannel();
 		ByteBuffer chunkContainer = ByteBuffer.allocate(BLOCK_SIZE);
 
+		
+		
+		
+		
+		// *** MAIN LOOP ***
 
+		int sn = 1;
+		
 		while(inChannel.read(chunkContainer) > 0) {
 
 			// --- Read chunk of file from buffer ---
@@ -86,6 +88,7 @@ public class Client
 			DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 
 			boolean acked = false;
+			int timeout = ACK_TIMEOUT;
 			while (!acked) {
 				// --- Send UDP datagram ---
 				try {
@@ -100,7 +103,9 @@ public class Client
 
 				// ---- Receive packet ----
 				byte[] recvBuf = new byte[RX_BUFSIZE];
+				socket.setSoTimeout(timeout);
 				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
+				long timerStart = System.currentTimeMillis();
 				try{
 					socket.receive(recvPkt);
 				}
@@ -112,6 +117,7 @@ public class Client
 					System.err.println("I/O error while receiving datagram:\n" + e);
 					socket.close(); System.exit(-1);
 				}
+				int usedTimeout = (int) (System.currentTimeMillis() - timerStart);
 
 				// ---- Process received packet ----
 				byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
@@ -119,10 +125,14 @@ public class Client
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
 				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
 					System.out.println("!Not an ACK");
-				else if (recvUTPpkt.sn != sn)
+				else if (recvUTPpkt.sn != sn) {
 					System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
-				else
+					timeout = timeout - usedTimeout;
+				}
+				else {
 					acked = true;
+					socket.setSoTimeout(ACK_TIMEOUT); // restore default timeout
+				}
 
 				//DEBUG
 				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
@@ -180,7 +190,7 @@ public class Client
 			byte[] recvData = recvFin.getData();				// payload of recv UDP datagram
 			recvData = Arrays.copyOf(recvData, recvFin.getLength());
 			UTPpacket recvUTPpktFin = new UTPpacket(recvData);		// parse UDP payload
-			if (recvUTPpktFin.function != UTPpacket.FUNCT_FIN)
+			if (recvUTPpktFin.function != UTPpacket.FUNCT_ACKFIN)
 				System.out.println("!Not FIN");
 			else
 				acked = true;
