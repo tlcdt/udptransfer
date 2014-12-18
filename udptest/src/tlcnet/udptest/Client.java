@@ -12,24 +12,23 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432;
 	private static final int DEF_CLIENT_PORT = 65431;
-	 // The client port needs to be standardized even in a client/server architecture,
-	 //  for compatibility with evil stuff such as NAT.
-	
-	
-	
-	public static void main(String args[])  
+	static final int BLOCK_SIZE = 512;
+
+
+
+	public static void main(String args[]) throws IOException
 	{
 		int channelPort = DEF_CHANNEL_PORT;
 		int dstPort = Server.DEF_SERVER_PORT;
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
-		
+
 		if (args.length != 3) {
-		    System.out.println("Usage: java Client <dest address> <channel address> <local file>"); //unused
-		    return;
+			System.out.println("Usage: java Client <dest address> <channel address> <local file>"); //unused
+			return;
 		}
-		
+
 		// ---- Create socket ----
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
@@ -39,9 +38,9 @@ public class Client
 			System.err.println("Error creating datagram socket:\n" + e);
 			return;
 		}
-		
-		
-		
+
+
+
 		try {
 			dstAddr = InetAddress.getByName(args[0]);
 			channelAddr = InetAddress.getByName(args[1]);
@@ -50,15 +49,15 @@ public class Client
 			System.err.println(e);
 			socket.close();	return;
 		}
-		
-		
+
+
 		// *** MAIN LOOP ***
-			
+
 		int sn = 1;
-		RandomAccessFile theFile;
+		RandomAccessFile theFile = null;
 		try	{
 			String fileName = args[2];
-			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader TODO: fix the warning
+			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader
 		}
 		catch(FileNotFoundException e)	{
 			System.out.println("Error: file not found");
@@ -66,85 +65,81 @@ public class Client
 			return;
 		}
 		FileChannel inChannel = theFile.getChannel();
-		ByteBuffer chunkContainer = ByteBuffer.allocate(512);
-		
-		try	{
-			while(inChannel.read(chunkContainer) > 0) {
-				
-				// --- Read chunk of file from buffer ---
-				chunkContainer.flip();	//Important! Otherwise .remaining() method gives 0
-				byte[] bytes = new byte[chunkContainer.remaining()];
-			    chunkContainer.get(bytes, 0, bytes.length);
-				chunkContainer.clear();
-				
-				// --- Assemble packet (UDP payload) ---
-				UTPpacket sendUTPpkt = new UTPpacket();
-				sendUTPpkt.sn = sn;
-				sendUTPpkt.dstAddr = dstAddr;
-				sendUTPpkt.dstPort = (short)dstPort;
-				sendUTPpkt.payl = bytes;	//Directly obtained from chunkContainer
-				byte[] sendData = sendUTPpkt.getRawData();
-				DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
-	
-				boolean acked = false;
-				while (!acked) {
-					// --- Send UDP datagram ---
-					try {
-						System.out.println("Sending SN=" + sn);
-						socket.send(sndPkt);
-					}
-					catch(IOException e) {
-						System.err.println("I/O error while sending datagram");
-						socket.close();
-						return;
-					}
-		
-					// ---- Receive packet ----
-					byte[] recvBuf = new byte[RX_BUFSIZE];
-					DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-					try{
-						socket.receive(recvPkt);
-					}
-					catch (SocketTimeoutException e) {
-						System.out.println("!ACK not received for SN=" + sn + "\nRetransmitting");
-						continue;
-					}
-					catch(IOException e) {
-						System.err.println("I/O error while receiving datagram:\n" + e);
-						socket.close(); System.exit(-1);
-					}
-					
-					// ---- Process received packet ----
-					byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
-					recvData = Arrays.copyOf(recvData, recvPkt.getLength());
-					UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
-					if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
-						System.out.println("!Not an ACK");
-					else if (recvUTPpkt.sn != sn)
-						System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
-					else
-						acked = true;
-	
-					//DEBUG
-					System.out.println("\n------\nRECV DATA:\n" + Utils.byteArr2str(recvData));
-	
-					System.out.println("Rcvd SN=" + recvUTPpkt.sn + "\nPayload (len=" + recvUTPpkt.payl.length
-							+ "): " + new String(recvUTPpkt.payl) + "\n");
+		ByteBuffer chunkContainer = ByteBuffer.allocate(BLOCK_SIZE);
+
+
+		while(inChannel.read(chunkContainer) > 0) {
+
+			// --- Read chunk of file from buffer ---
+			chunkContainer.flip();	//Important! Otherwise .remaining() method gives 0
+			byte[] bytes = new byte[chunkContainer.remaining()];
+			chunkContainer.get(bytes, 0, bytes.length);
+			chunkContainer.clear();
+
+			// --- Assemble packet (UDP payload) ---
+			UTPpacket sendUTPpkt = new UTPpacket();
+			sendUTPpkt.sn = sn;
+			sendUTPpkt.dstAddr = dstAddr;
+			sendUTPpkt.dstPort = (short)dstPort;
+			sendUTPpkt.payl = bytes;	//Directly obtained from chunkContainer
+			byte[] sendData = sendUTPpkt.getRawData();
+			DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
+
+			boolean acked = false;
+			while (!acked) {
+				// --- Send UDP datagram ---
+				try {
+					System.out.println("Sending SN=" + sn);
+					socket.send(sndPkt);
 				}
-	
-				
-				// Increase counter
-				sn++;
+				catch(IOException e) {
+					System.err.println("I/O error while sending datagram");
+					socket.close(); theFile.close();
+					return;
+				}
+
+				// ---- Receive packet ----
+				byte[] recvBuf = new byte[RX_BUFSIZE];
+				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
+				try{
+					socket.receive(recvPkt);
+				}
+				catch (SocketTimeoutException e) {
+					System.out.println("!ACK not received for SN=" + sn + "\nRetransmitting");
+					continue;
+				}
+				catch(IOException e) {
+					System.err.println("I/O error while receiving datagram:\n" + e);
+					socket.close(); System.exit(-1);
+				}
+
+				// ---- Process received packet ----
+				byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
+				recvData = Arrays.copyOf(recvData, recvPkt.getLength());
+				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse UDP payload
+				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
+					System.out.println("!Not an ACK");
+				else if (recvUTPpkt.sn != sn)
+					System.out.println("!ACK for the wrong SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
+				else
+					acked = true;
+
+				//DEBUG
+				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+				System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+
 			}
-			inChannel.close();
-			theFile.close();
+
+
+			// Increase counter
+			sn++;
 		}
-		catch(IOException e)	{
-			System.out.println("IO error occurred while reading from file");
-		}
-		
+		inChannel.close();
+		theFile.close();
+
+
 		// Send FIN packet
-		
+
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.sn = sn;
 		sendUTPpkt.dstAddr = dstAddr;
@@ -153,7 +148,7 @@ public class Client
 		sendUTPpkt.function = UTPpacket.FUNCT_FIN;
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
-		
+
 		boolean acked = false;
 		while (!acked) {
 			// --- Wait for ack ---
@@ -166,7 +161,7 @@ public class Client
 				socket.close();
 				return;
 			}
-			
+
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvFin = new DatagramPacket(recvBuf, recvBuf.length);
 			try{
@@ -180,7 +175,7 @@ public class Client
 				System.err.println("I/O error while receiving FIN packet:\n" + e);
 				socket.close(); System.exit(-1);
 			}
-			
+
 			// ---- Process received packet ----
 			byte[] recvData = recvFin.getData();				// payload of recv UDP datagram
 			recvData = Arrays.copyOf(recvData, recvFin.getLength());
@@ -189,7 +184,8 @@ public class Client
 				System.out.println("!Not FIN");
 			else
 				acked = true;
-				System.out.println("Yay. Transmition complete. Have fun while I stay here doing absolutely nothing. Merry Christmas :(");
+			System.out.println("Yay. Transmition complete. Have fun while I stay here doing absolutely nothing. Merry Christmas :(");
 		}
+
 	}
 }
