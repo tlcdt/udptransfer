@@ -68,7 +68,10 @@ public class Channel {
 			
 			//DEBUG
 			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
+			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
+				System.out.println("ACK " + utpPkt.sn);
+			else
+				System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
 
 			
 			
@@ -120,7 +123,7 @@ public class Channel {
 	
 
 	private static boolean mustDrop(int length) {
-		double discard_prob = 1 - Math.exp(-length/(double)1024); // TODO: too low for testing
+		double discard_prob = 1 - Math.exp(-length/(double)1024);
 		boolean discard = new Random().nextDouble() <= discard_prob;
 		return discard;
 	}

@@ -9,6 +9,10 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 
+// TODO: What if the Server starts listening after the Client has started transmitting?
+// The first received pkt has SN > 1.
+// Should we consider this an error and abort?
+
 public class Server {
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int DEF_CHANNEL_PORT = 65432;
