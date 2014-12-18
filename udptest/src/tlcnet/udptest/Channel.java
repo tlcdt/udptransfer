@@ -13,10 +13,14 @@ import java.util.concurrent.TimeUnit;
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
 	private static final int CORE_POOL_SIZE = 50; // TODO: check this
-	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
+	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
 	
+	
+	
+	
 	public static void main(String[] args) {
+		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
 		
 		// --- Create listen and send sockets ---
@@ -59,8 +63,7 @@ public class Channel {
 			
 			
 			// ---- Process received packet and prepare new packet ----
-			byte[] recvData = recvPkt.getData();				// payload of recv UDP datagram
-			recvData = Arrays.copyOf(recvData, recvPkt.getLength());
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // payload of recv UDP datagram
 			UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
 			int dstPort = (int)utpPkt.dstPort & 0xffff;
@@ -93,7 +96,7 @@ public class Channel {
 	}
 
 	
-	public static class SendDelayedPacket implements Runnable
+	private static class SendDelayedPacket implements Runnable
 	{
 		private DatagramSocket dstSock;
 		private DatagramSocket srcSock;

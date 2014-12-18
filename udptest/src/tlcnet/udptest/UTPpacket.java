@@ -10,9 +10,9 @@ public class UTPpacket {
 	static final int INVALID_SN    = -1;
 	
 	static final int FUNCT_INVALID = -1;
-	static final int FUNCT_SNDREQ  = 1;
-	static final int FUNCT_SNDDATA = 2;
-	static final int FUNCT_ACKREQ  = 9;
+	//static final int FUNCT_REQ  = 1;
+	static final int FUNCT_DATA = 2;
+	//static final int FUNCT_ACKREQ  = 9;
 	static final int FUNCT_ACKDATA = 10;
 	static final int FUNCT_FIN = 42;
 	static final int FUNCT_ACKFIN = 43;

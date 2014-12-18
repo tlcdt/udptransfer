@@ -8,10 +8,10 @@ import java.nio.channels.FileChannel;
 
 public class Client
 {
-	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
+	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 	private static final short ACK_TIMEOUT = 2000;
-	private static final int DEF_CHANNEL_PORT = 65432;
-	private static final int DEF_CLIENT_PORT = 65431;
+	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
+	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
 
 
@@ -65,24 +65,37 @@ public class Client
 
 
 
+		
+		
+		
+		
+		// * * * * * * * * * * * * * *//
+		// * *  DATA TRANSFER LOOP * *//
+		// * * * * * * * * * * * * * *//
 
-		// *** MAIN LOOP ***
-
+		
 		int sn = 1;
 
 		while(inChannel.read(chunkContainer) > 0) {
 
+			
+			
 			// --- Read chunk of file from buffer ---
+			
 			chunkContainer.flip();	//Important! Otherwise .remaining() method gives 0
 			byte[] bytes = new byte[chunkContainer.remaining()];
 			chunkContainer.get(bytes, 0, bytes.length);
 			chunkContainer.clear();
 
+			
+			
 			// --- Assemble packet (UDP payload) ---
+			
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.sn = sn;
 			sendUTPpkt.dstAddr = dstAddr;
 			sendUTPpkt.dstPort = (short)dstPort;
+			sendUTPpkt.function = (byte) UTPpacket.FUNCT_DATA;
 			sendUTPpkt.payl = bytes;	//Directly obtained from chunkContainer
 			byte[] sendData = sendUTPpkt.getRawData();
 			DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
@@ -112,10 +125,12 @@ public class Client
 
 
 				// Must receive something before sending another pkt.
-				// Set timeout for current SN. If other ACKs are received, ignore them and 
-				// wait again to receive after updating the timeout.
+				// Set timeout for current SN. If other ACKs are received, ignore them,
+				// update the timeout and finally wait again to receive the right ACK.
 
+				
 				// ---- Receive packet ----
+				
 				byte[] recvBuf = new byte[RX_BUFSIZE];
 				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 				socket.setSoTimeout(timeout);
@@ -125,7 +140,7 @@ public class Client
 				}
 				catch (SocketTimeoutException e) {
 
-					// CASE 1
+					// **CASE 1**
 					// The ACK for the current SN has timed out.
 					System.out.println("\n!ACK missing for SN=" + sn + "\nRetransmitting");
 					timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
@@ -141,11 +156,14 @@ public class Client
 
 
 
+				
 
 				// ---- Process received packet ----
+				
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
 
+				//DEBUG
 				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
 					System.out.println("ACK " + recvUTPpkt.sn);
@@ -153,12 +171,12 @@ public class Client
 					System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
 
 				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
-					// CASE 2
+					// **CASE 2**
 					// This is not an ACK
 					System.out.println("!Not an ACK"); // TODO: handle this properly
 
 				else if (recvUTPpkt.sn != sn) {
-					// CASE 3:
+					// **CASE 3**
 					// This is an _old_ ACK:
 					//   - the timer keeps running because it's a timer for the current SN;
 					//   - no retransmission.
@@ -170,7 +188,7 @@ public class Client
 				}
 
 				else {
-					// CASE 4:
+					// **CASE 4**
 					// Current SN was ACKed: default timeout for next tx-rx loop is restored
 					// at the beginning of the loop.
 					acked = true;
@@ -184,8 +202,20 @@ public class Client
 		inChannel.close();
 		theFile.close();
 
+		/* * * END OF DATA TRANSFER LOOP * * */
+		
+		
+		
+		
+		
+		
+		
+		
+		
 
-		// Send FIN packet
+		// * * * * * * * * * * * * *//
+		// * *  SEND FIN PACKET  * *//
+		// * * * * * * * * * * * * *//
 
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.sn = sn;
@@ -195,17 +225,6 @@ public class Client
 		sendUTPpkt.function = UTPpacket.FUNCT_FIN;
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
-
-
-
-
-
-
-
-
-
-
-
 
 
 		boolean acked = false;
@@ -240,7 +259,7 @@ public class Client
 			}
 			catch (SocketTimeoutException e) {
 
-				// CASE 1
+				// **CASE 1**
 				// The FINACK has timed out.
 				System.out.println("\n!FINACK missing\nRetransmitting");
 				timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
@@ -271,7 +290,7 @@ public class Client
 
 
 			if (recvUTPpkt.function != UTPpacket.FUNCT_ACKFIN) {
-				// CASE 2:
+				// **CASE 2**
 				// This is not a FINACK:
 				//   - the timer keeps running because it's a timer for the FINACK timeout;
 				//   - no FIN retransmission.
@@ -283,9 +302,10 @@ public class Client
 			}
 
 			else {
-				// CASE 3:
+				// **CASE 3**
 				// Received a FINACK: done.
 				acked = true;
+				System.out.println("Yay. Transmission complete. Have fun while I stay here doing absolutely nothing. Merry Christmas :(");
 			}
 		}
 

@@ -9,24 +9,31 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 
-// TODO: What if the Server starts listening after the Client has started transmitting?
-// The first received pkt has SN > 1.
-// Should we consider this an error and abort?
+/* TODO: What if the Server starts listening after the Client has started transmitting?
+ * The first received pkt has SN > 1.
+ * Should we consider this an error and abort?
+ */
+
 
 public class Server {
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int DEF_CHANNEL_PORT = 65432;
 	static final int DEF_SERVER_PORT = 65433;
-	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks...ugly!
-	private static final int RX_BUFSIZE = 2048; // exceeding data will be discarded
+	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks
+	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
+	
+	
+	
 	public static void main(String[] args) {
+		
 		int listenPort = DEF_SERVER_PORT;
 		int channelPort = DEF_CHANNEL_PORT;
+		int clientPort = Client.DEF_CLIENT_PORT;
 		InetAddress clientAddr = null;
 		
 		if (args.length != 2) {
-		    System.out.println("Usage: java Client <client address> <path to new file>\nExample: Client /home/user/workspace/filename"); //unused
+		    System.out.println("Usage: java Server <client address> <path to new file>");
 		    return;
 		}
 		try {
@@ -35,7 +42,7 @@ public class Server {
 			System.err.println(e); return;
 		}
 		
-		// Create the socket
+		// --- Create the socket ---
 		DatagramSocket socket = null;
 		try {
 			socket = new DatagramSocket(listenPort);
@@ -49,8 +56,21 @@ public class Server {
 		//This is needed to copy the received file into a given directory
 		ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 		
-		boolean mustStop = false;		//Needed to stop the cycle
-		while(!mustStop)
+		
+		
+		
+		
+		
+		
+		
+		// * * * * * * * * * * * * * *//
+		// * *  DATA TRANSFER LOOP * *//
+		// * * * * * * * * * * * * * *//
+		
+		
+		
+		boolean gotFIN = false; //Needed to stop the cycle
+		while(!gotFIN)
 		{
 			// ---- Receive packet ----
 
@@ -59,10 +79,9 @@ public class Server {
 			try{
 				socket.receive(recvPkt);
 			}
-			catch (SocketTimeoutException e) {
-				mustStop = true;		
+			catch (SocketTimeoutException e) {		
 				System.out.println("Closing connection: FIN not received...");
-				continue;
+				break;
 			}
 			catch(IOException e) {
 				System.err.println("I/O error while receiving datagram:\n" + e);
@@ -73,22 +92,27 @@ public class Server {
 
 
 			// ---- Process packet and prepare new packet ----
-
-			byte[] recvData = recvPkt.getData();				// payload of recv UDP packet
-			recvData = Arrays.copyOf(recvData, recvPkt.getLength());  // (truncate unused buffer)
-			UTPpacket recvUTPpkt = new UTPpacket(recvData);		// parse payload
+			
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());  // payload of recv UDP packet
+			UTPpacket recvUTPpkt = new UTPpacket(recvData);			// parse payload
 			InetAddress channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
 
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.dstAddr = clientAddr;
-			sendUTPpkt.dstPort = (short) DEF_CLIENT_PORT;
+			sendUTPpkt.dstPort = (short) clientPort;
 			sendUTPpkt.sn = recvUTPpkt.sn;
-			sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
 			sendUTPpkt.payl = new byte[0];
-			
-			if (recvUTPpkt.function == Byte.valueOf(Integer.toString(UTPpacket.FUNCT_FIN)))	{
+			switch (recvUTPpkt.function) {
+			case UTPpacket.FUNCT_DATA:
+				sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
+				break;
+			case UTPpacket.FUNCT_FIN:
 				sendUTPpkt.function = UTPpacket.FUNCT_ACKFIN;
-				mustStop = true;
+				gotFIN = true;
+				break;
+			default:
+				System.out.println("Wut?");
+				System.exit(-1);
 			}
 			
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
@@ -99,15 +123,16 @@ public class Server {
 			//DEBUG
 			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 			System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
-			if(mustStop)	{
+			if(gotFIN)
 				System.out.println("Oh, this is a FIN! I'll ack it right away!");
-			}
 			
 
 			
 			
 			
-			//Append current part of the file to output
+			// Append current part of the file to output
+			// TODO: Start writing something on the disk, use this as a sort of buffer
+			// TODO: (for the Client as well) Maybe read/write asynchronously from/to file so as to optimize computational time for I/O operations?
 			try	{
 				outputStream.write(recvUTPpkt.payl);
 			}
@@ -116,8 +141,9 @@ public class Server {
 			}
 			
 			
+			
 
-			// --- Send ACK ---
+			// --- Send ACK or FINACK ---
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 			try{
 				socket.send(sendPkt);
@@ -127,10 +153,14 @@ public class Server {
 				socket.close(); System.exit(-1);
 			}
 		}
+		System.out.println("Bye bye, Client! ;-)");
+		
+		
+		
 		
 		// --- Copy file to given directory ---
-		System.out.println("Bye bye, Client! ;-)");
-		byte[] finalData = outputStream.toByteArray();
+		
+		byte[] finalData = outputStream.toByteArray();	// TODO: with very large files this won't work
 		
 		String newFile = args[1];
 		try (FileOutputStream fos = new FileOutputStream(newFile)) {
