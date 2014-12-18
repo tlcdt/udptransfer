@@ -56,8 +56,8 @@ public class Server {
 				socket.receive(recvPkt);
 			}
 			catch (SocketTimeoutException e) {
-				mustStop = true;		//When there are probably no more packets (said: ugly)
-				System.out.println("Closing connection: timeout expired. Check for your copy of the file.");
+				mustStop = true;		
+				System.out.println("Closing connection: FIN not received...");
 				continue;
 			}
 			catch(IOException e) {
@@ -81,6 +81,12 @@ public class Server {
 			sendUTPpkt.sn = recvUTPpkt.sn;
 			sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
 			sendUTPpkt.payl = new byte[0];
+			
+			if (recvUTPpkt.function == Byte.valueOf(Integer.toString(UTPpacket.FUNCT_FIN)))	{
+				sendUTPpkt.function = UTPpacket.FUNCT_ACKFIN;
+				mustStop = true;
+			}
+			
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram
 
 
@@ -89,6 +95,10 @@ public class Server {
 			//DEBUG
 			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 			System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+			if(mustStop)	{
+				System.out.println("Oh, this is a FIN! I'll ack it right away!");
+			}
+			
 
 			
 			
@@ -115,6 +125,7 @@ public class Server {
 		}
 		
 		// --- Copy file to given directory ---
+		System.out.println("Bye bye, Client! ;-)");
 		byte[] finalData = outputStream.toByteArray();
 		
 		String newFile = args[1];
