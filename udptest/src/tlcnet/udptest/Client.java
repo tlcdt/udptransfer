@@ -22,10 +22,12 @@ public class Client
 		int dstPort = Server.DEF_SERVER_PORT;
 		InetAddress channelAddr;
 		InetAddress dstAddr;
+		long startTransferTime = 0;
+		boolean firstPacket = true;
 		DatagramSocket socket = null;
 
 		if (args.length != 3) {
-			System.out.println("Usage: java Client <dest address> <channel address> <local file>"); //unused
+			System.out.println("Usage: java Client <dest address> <channel address> <local file>"); 
 			return;
 		}
 
@@ -98,6 +100,12 @@ public class Client
 			sendUTPpkt.function = (byte) UTPpacket.FUNCT_DATA;
 			sendUTPpkt.payl = bytes;	//Directly obtained from chunkContainer
 			byte[] sendData = sendUTPpkt.getRawData();
+			
+			if(sendUTPpkt.sn == 1 && firstPacket)	{
+				startTransferTime = System.currentTimeMillis();
+				firstPacket = false;
+			}
+			
 			DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 
 
@@ -203,7 +211,7 @@ public class Client
 		theFile.close();
 
 		/* * * END OF DATA TRANSFER LOOP * * */
-		
+		double transmissionSec = (double) (System.currentTimeMillis() - startTransferTime)/1000;
 		
 		
 		
@@ -305,7 +313,7 @@ public class Client
 				// **CASE 3**
 				// Received a FINACK: done.
 				acked = true;
-				System.out.println("Yay. Transmission complete. Have fun while I stay here doing absolutely nothing. Merry Christmas :(");
+				System.out.println("Yay. Transmission complete: it took " + transmissionSec + " s. Merry Christmas :(");
 			}
 		}
 
