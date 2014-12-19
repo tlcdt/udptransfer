@@ -6,14 +6,16 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public class UTPpacket {
+	
 	static final int INVALID_PORT  = -1;
 	static final int INVALID_SN    = -1;
 	
 	static final int FUNCT_INVALID = -1;
-	//static final int FUNCT_REQ  = 1;
 	static final int FUNCT_DATA = 2;
-	//static final int FUNCT_ACKREQ  = 9;
-	static final int FUNCT_ACKDATA = 10;
+	static final int FUNCT_FILEINFO  = 3;
+	static final int FUNCT_FILEINFO_ACK = 4;
+	static final int FUNCT_ENDOFBLOCK = 5;
+	static final int FUNCT_ENDOFBLOCK_ACK = 6;
 	static final int FUNCT_FIN = 42;
 	static final int FUNCT_ACKFIN = 43;
 	
@@ -34,6 +36,7 @@ public class UTPpacket {
 	int sn = INVALID_SN;
 	byte function = FUNCT_INVALID;
 	byte[] payl = null;
+	FileInfo fileInfo = null;
 
 	public UTPpacket() {
 		super();
@@ -55,6 +58,12 @@ public class UTPpacket {
 		sn = bytes2int(Arrays.copyOfRange(rawData, SN_START, SN_END+1));
 		function = rawData[FUNCT_START];
 		payl = Arrays.copyOfRange(rawData, PAYL_START, rawData.length);
+		
+		// FileInfo packet
+		if (function == FUNCT_FILEINFO) {
+			fileInfo = new FileInfo(payl);
+			// Now the dimension of a block is accessible through this object
+		}
 	}
 	
 	
@@ -101,6 +110,44 @@ public class UTPpacket {
 	
 	private static short bytes2short(byte[] bytes) {
 	     return ByteBuffer.wrap(bytes).getShort();
+	}
+	
+	
+	
+	
+	
+	public class FileInfo {
+		
+		static final int BLOCKDIM_START  = 0;  // 4
+		static final int BLOCKDIM_END    = 3;
+		static final int FILEINFO_LENGTH = 4;
+		static final int BLOCKDIM_LENGTH = BLOCKDIM_END - BLOCKDIM_START + 1;
+		
+		int blockDim = 0;
+		
+		FileInfo(byte[] payl) {
+			super();
+			blockDim = bytes2int(Arrays.copyOfRange(payl, BLOCKDIM_START, BLOCKDIM_END));
+		}
+		
+	}
+	
+	
+	
+	public class EndOfBlockAck {
+		
+		// SN_LENGTH can be reached from down here (y)
+		
+		int numberOfMissingSN = -1;
+		int[] missingSN = null;
+		
+		public EndOfBlockAck(byte[] payl) {
+			super();
+			numberOfMissingSN = payl.length / SN_LENGTH; //TODO handle errors?
+			for (int i = 0; i < numberOfMissingSN; i++)
+				missingSN[i] = bytes2int(Arrays.copyOfRange
+						(payl, SN_LENGTH * i, SN_LENGTH * (i + 1)));
+		}
 	}
 
 }

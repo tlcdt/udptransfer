@@ -122,7 +122,7 @@ public class Server {
 			sendUTPpkt.payl = new byte[0];
 			switch (recvUTPpkt.function) {
 			case UTPpacket.FUNCT_DATA:
-				sendUTPpkt.function = UTPpacket.FUNCT_ACKDATA;
+				sendUTPpkt.function = UTPpacket.FUNCT_INVALID; //TODO fix
 				break;
 			case UTPpacket.FUNCT_FIN:
 				sendUTPpkt.function = UTPpacket.FUNCT_ACKFIN;

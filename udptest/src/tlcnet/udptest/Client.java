@@ -172,18 +172,18 @@ public class Client
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
 
 				//DEBUG
-				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
-					System.out.println("ACK " + recvUTPpkt.sn);
-				else
-					System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+//				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+//				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
+//					System.out.println("ACK " + recvUTPpkt.sn);
+//				else
+//					System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
 
-				if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
+				/*if (recvUTPpkt.function != UTPpacket.FUNCT_ACKDATA)
 					// **CASE 2**
 					// This is not an ACK
 					System.out.println("!Not an ACK"); // TODO: handle this properly
 
-				else if (recvUTPpkt.sn != sn) {
+				else */if (recvUTPpkt.sn != sn) {
 					// **CASE 3**
 					// This is an _old_ ACK:
 					//   - the timer keeps running because it's a timer for the current SN;
@@ -289,12 +289,12 @@ public class Client
 
 			//DEBUG
 			System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
-				System.out.println("ACK " + recvUTPpkt.sn);
-			else if (recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN)
-				System.out.println("ACKFIN " + recvUTPpkt.sn);
-			else
-				System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+//			if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
+//				System.out.println("ACK " + recvUTPpkt.sn);
+//			else if (recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN)
+//				System.out.println("ACKFIN " + recvUTPpkt.sn);
+//			else
+//				System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
 
 
 			if (recvUTPpkt.function != UTPpacket.FUNCT_ACKFIN) {

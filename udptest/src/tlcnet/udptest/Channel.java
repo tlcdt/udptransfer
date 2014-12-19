@@ -71,10 +71,10 @@ public class Channel {
 			
 			//DEBUG
 			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
-				System.out.println("ACK " + utpPkt.sn);
-			else
-				System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
+//			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
+//				System.out.println("ACK " + utpPkt.sn);
+//			else
+//				System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
 
 			
 			
