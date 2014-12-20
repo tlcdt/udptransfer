@@ -14,8 +14,8 @@ public class UTPpacket {
 	static final int FUNCT_DATA = 2;
 	static final int FUNCT_FILEINFO  = 3;
 	static final int FUNCT_FILEINFO_ACK = 4;
-	static final int FUNCT_ENDOFBLOCK = 5;
-	static final int FUNCT_ENDOFBLOCK_ACK = 6;
+	static final int FUNCT_EOB = 5;	// endofblock
+	static final int FUNCT_EOB_ACK = 6;
 	static final int FUNCT_FIN = 42;
 	static final int FUNCT_ACKFIN = 43;
 	
@@ -37,16 +37,24 @@ public class UTPpacket {
 	byte function = FUNCT_INVALID;
 	byte[] payl = null;
 	FileInfo fileInfo = null;
+	EndOfBlock endOfBlock = null;
+	EndOfBlockAck endOfBlockAck = null;
 
+	
+	
 	public UTPpacket() {
 		super();
 	}
+	
+	
 	
 	public UTPpacket(byte[] rawData) {
 		super();
 		parseData(rawData);
 	}
 
+	
+	
 	private void parseData(byte[] rawData) {
 		try {
 			dstAddr = InetAddress.getByAddress(Arrays.copyOfRange(rawData, DSTADDR_START, DSTADDR_END+1));
@@ -64,6 +72,16 @@ public class UTPpacket {
 			fileInfo = new FileInfo(payl);
 			// Now the dimension of a block is accessible through this object
 		}
+		
+		// This is an EndOfBlock packet
+		else if (function == FUNCT_EOB) {
+			endOfBlock = new EndOfBlock(payl);
+		}
+		
+		// This is an EndOfBlockAck packet
+		else if (function == FUNCT_EOB_ACK) {
+			endOfBlockAck = new EndOfBlockAck(payl);
+		}
 	}
 	
 	
@@ -80,15 +98,9 @@ public class UTPpacket {
 		
 		return rawData;
 	}
+
 	
-	
-	
-//	private byte[] getField(byte[] rawData, int first, int last) {
-//		
-//	}
-	
-	
-	
+	// TODO put these in Utils
 	private static byte[] int2bytes(int value, int size) {
 		if (size==4)
 			return ByteBuffer.allocate(4).putInt(value).array();
@@ -133,20 +145,44 @@ public class UTPpacket {
 	}
 	
 	
+	public class EndOfBlock {
+		
+		// So we got no problem with the last block being smaller
+		private static final int NUMBER_SENT_SN_START = 0;
+		private static final int NUMBER_SENT_SN_END = 3;
+		private static final int BN_START = 4;
+		private static final int BN_END = 7;
+		
+		int numberOfSentSN = -1;
+		int bn = -1;
+		
+		public EndOfBlock(byte[] payl) {
+			super();
+			numberOfSentSN = bytes2int(Arrays.copyOfRange
+					(payl, NUMBER_SENT_SN_START, NUMBER_SENT_SN_END + 1));
+			bn = bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
+		}
+	}
+	
 	
 	public class EndOfBlockAck {
+		private static final int BN_START = 0;
+		private static final int BN_END = 3;
+		private static final int MISSING_SN_START = 4;
 		
 		// SN_LENGTH can be reached from down here (y)
-		
-		int numberOfMissingSN = -1;
+
+		int bn = -1;
 		int[] missingSN = null;
+		int numberOfMissingSN = -1;
 		
 		public EndOfBlockAck(byte[] payl) {
 			super();
+			bn = bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
 			numberOfMissingSN = payl.length / SN_LENGTH; //TODO handle errors?
 			for (int i = 0; i < numberOfMissingSN; i++)
 				missingSN[i] = bytes2int(Arrays.copyOfRange
-						(payl, SN_LENGTH * i, SN_LENGTH * (i + 1)));
+						(payl, MISSING_SN_START + SN_LENGTH * i, MISSING_SN_START + SN_LENGTH * (i + 1)));
 		}
 	}
 

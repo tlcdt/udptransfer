@@ -24,6 +24,8 @@ public class Server {
 	
 	// When the write buffer exceeds this number of bytes, it is written on the output file
 	private static final int WRITEBUF_THRESH = 20 * 1024;
+	
+	private static final int INIT_BLOCKSIZE = 5; // TODO: this must be updated when receiving
 
 	
 
