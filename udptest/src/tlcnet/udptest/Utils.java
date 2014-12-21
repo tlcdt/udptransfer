@@ -2,6 +2,8 @@ package tlcnet.udptest;
 
 import java.nio.ByteBuffer;
 
+//FIXME These methods are bad: no input check!
+
 public class Utils {
 
 	public static int[] byteArr2intArr(byte[] in) {
@@ -27,6 +29,48 @@ public class Utils {
 			return ByteBuffer.allocate(4).putInt(value).array();
 		if (size==2)
 			return ByteBuffer.allocate(2).putShort((short)value).array();
+		if (size==3) {
+			byte[] out = new byte[3];
+			byte[] tmp = ByteBuffer.allocate(4).putInt(value).array();
+			System.arraycopy(tmp, 1, out, 0, 3);
+			return out;
+		}
 		return null;
+	}
+	
+	
+	public static int bytes2int(byte[] bytes) {
+		if (bytes.length == 4)
+			return ByteBuffer.wrap(bytes).getInt();
+		if (bytes.length < 4) {
+			byte[] newbytes = new byte[] {(byte)0, (byte)0, (byte)0, (byte)0};
+			System.arraycopy(bytes, 0, newbytes, 4-bytes.length, bytes.length);
+			return ByteBuffer.wrap(newbytes).getInt();
+		}
+		return -1;
+	}
+	
+
+	
+	public static short bytes2short(byte[] bytes) {
+	     return ByteBuffer.wrap(bytes).getShort();
+	}
+	
+	
+	public static byte[] intarray2bytearray(int[] in, int bytesForEachInt) {
+		byte[] out = new byte[in.length * bytesForEachInt];
+		
+		for (int i = 0; i < in.length; i++) {
+			byte[] bytes = int2bytes(in[i], bytesForEachInt);
+			System.arraycopy(bytes, 0, out, i * bytesForEachInt, bytesForEachInt);
+		}
+		
+		return out;
+	}
+	
+	
+	
+	public static void logg(Object obj) {
+		System.out.println(obj);
 	}
 }

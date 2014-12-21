@@ -2,13 +2,12 @@ package tlcnet.udptest;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public class UTPpacket {
 	
-	static final int INVALID_PORT  = -1;
-	static final int INVALID_SN    = -1;
+	static final int INVALID_PORT  = 0;
+	static final int INVALID_SN    = 0;
 	
 	static final int FUNCT_INVALID = -1;
 	static final int FUNCT_DATA = 2;
@@ -61,9 +60,10 @@ public class UTPpacket {
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
 		}
-		dstPort = bytes2short(Arrays.copyOfRange(rawData, DSTPORT_START, DSTPORT_END+1));
+		dstPort = Utils.bytes2short(Arrays.copyOfRange(rawData, DSTPORT_START, DSTPORT_END+1));
 
-		sn = bytes2int(Arrays.copyOfRange(rawData, SN_START, SN_END+1));
+		// TODO Handle degenerate situations (packets sent from other uncontrolled sources) with ArrayIndexOutOfBoundException. Leave fields as invalid.
+		sn = Utils.bytes2int(Arrays.copyOfRange(rawData, SN_START, SN_END+1));
 		function = rawData[FUNCT_START];
 		payl = Arrays.copyOfRange(rawData, PAYL_START, rawData.length);
 		
@@ -91,38 +91,60 @@ public class UTPpacket {
 		byte[] rawData = new byte[HEADER_LENGTH + payl.length];
 		
 		System.arraycopy(dstAddr.getAddress(), 0, rawData, DSTADDR_START, dstAddr.getAddress().length);
-		System.arraycopy(int2bytes(dstPort, 2), 0, rawData, DSTPORT_START, 2);
+		System.arraycopy(Utils.int2bytes(dstPort, 2), 0, rawData, DSTPORT_START, 2);
 		rawData[FUNCT_START] = function;
-		System.arraycopy(int2bytes(sn, 4), 4 - SN_LENGTH, rawData, SN_START, SN_LENGTH);
+		System.arraycopy(Utils.int2bytes(sn, 4), 4 - SN_LENGTH, rawData, SN_START, SN_LENGTH);
 		System.arraycopy(payl, 0, rawData, PAYL_START, payl.length);
 		
 		return rawData;
 	}
+	
+
+	/**
+	 * Initializes the fields of the object this.endOfBlockAck, and then updates the payload of this UTPpacket.
+	 * 
+	 * @param bn Block number for this EOB_ACK packet
+	 * @param missingSN Array of Sequence Numbers corresponding to packets that were not received
+	 */
+	public void setEndOfBlockAck(int bn, int[] missingSN) {
+
+		// Initialize the fields of the object endOfBlockAck
+		endOfBlockAck = new EndOfBlockAck();
+		endOfBlockAck.bn = bn;
+		endOfBlockAck.missingSN = new int[missingSN.length];
+		System.arraycopy(missingSN, 0, endOfBlockAck.missingSN, 0, missingSN.length);
+		
+		// Update the payload of the packet according to endOfBlockAck
+		endOfBlockAck.generateAndUpdatePayload();
+		
+		// The other fields are not initialized, in particular the function field. This must be done outside of this class.
+	}
 
 	
-	// TODO put these in Utils
-	private static byte[] int2bytes(int value, int size) {
-		if (size==4)
-			return ByteBuffer.allocate(4).putInt(value).array();
-		if (size==2)
-			return ByteBuffer.allocate(2).putShort((short)value).array();
-		return null;
+	
+	/**
+	 * Initializes the fields of the object this.endOfBlock, and then updates the payload of this UTPpacket.
+	 * 
+	 * @param bn Block number for this EOB packet
+	 * @param numberOfSentSN Number of packets of this block that have been sent. This should be always the same
+	 * except for the last block.
+	 */
+	public void setEndOfBlock(int bn, int numberOfSentSN) {
+
+		// Initialize the fields of the object endOfBlock
+		endOfBlock = new EndOfBlock();
+		endOfBlock.bn = bn;
+		endOfBlock.numberOfSentSN = numberOfSentSN;
+		
+		// Update the payload of the packet according to endOfBlockAck
+		endOfBlock.generateAndUpdatePayload();
+		
+		// The other fields are not initialized, in particular the function field. This must be done outside of this class.
 	}
 	
-	private static int bytes2int(byte[] bytes) {
-		if (bytes.length == 4)
-			return ByteBuffer.wrap(bytes).getInt();
-		if (bytes.length < 4) {
-			byte[] newbytes = new byte[] {(byte)0, (byte)0, (byte)0, (byte)0};
-			System.arraycopy(bytes, 0, newbytes, 4-bytes.length, bytes.length);
-			return ByteBuffer.wrap(newbytes).getInt();
-		}
-		return -1;
-	}
 	
-	private static short bytes2short(byte[] bytes) {
-	     return ByteBuffer.wrap(bytes).getShort();
-	}
+	
+
 	
 	
 	
@@ -139,7 +161,7 @@ public class UTPpacket {
 		
 		FileInfo(byte[] payl) {
 			super();
-			blockDim = bytes2int(Arrays.copyOfRange(payl, BLOCKDIM_START, BLOCKDIM_END));
+			blockDim = Utils.bytes2int(Arrays.copyOfRange(payl, BLOCKDIM_START, BLOCKDIM_END));
 		}
 		
 	}
@@ -147,20 +169,34 @@ public class UTPpacket {
 	
 	public class EndOfBlock {
 		
-		// So we got no problem with the last block being smaller
-		private static final int NUMBER_SENT_SN_START = 0;
-		private static final int NUMBER_SENT_SN_END = 3;
-		private static final int BN_START = 4;
-		private static final int BN_END = 7;
+		private static final int BN_START = 0;
+		private static final int BN_END = 3;
+		private static final int NUMBER_SENT_SN_START = 4;
+		private static final int NUMBER_SENT_SN_END = 7;
+		private static final int PAYL_LENGTH = 8;
 		
+		int bn = 0;
 		int numberOfSentSN = -1;
-		int bn = -1;
+		
+		public EndOfBlock() {
+			super();
+		}
 		
 		public EndOfBlock(byte[] payl) {
 			super();
-			numberOfSentSN = bytes2int(Arrays.copyOfRange
+			bn = Utils.bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
+			numberOfSentSN = Utils.bytes2int(Arrays.copyOfRange
 					(payl, NUMBER_SENT_SN_START, NUMBER_SENT_SN_END + 1));
-			bn = bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
+		}
+		
+		
+		void generateAndUpdatePayload() {
+			payl = new byte[PAYL_LENGTH];
+			byte[] bnBytes = Utils.int2bytes(bn, BN_END - BN_START + 1);
+			byte[] numSentSnBytes = Utils.int2bytes(numberOfSentSN, NUMBER_SENT_SN_END - NUMBER_SENT_SN_START + 1);
+			
+			System.arraycopy(bnBytes, 0, payl, BN_START, bnBytes.length);
+			System.arraycopy(numSentSnBytes, 0, payl, NUMBER_SENT_SN_START, numSentSnBytes.length);
 		}
 	}
 	
@@ -176,13 +212,30 @@ public class UTPpacket {
 		int[] missingSN = null;
 		int numberOfMissingSN = -1;
 		
+		
+		public EndOfBlockAck() {
+			
+		}
+		
+		
 		public EndOfBlockAck(byte[] payl) {
 			super();
-			bn = bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
-			numberOfMissingSN = payl.length / SN_LENGTH; //TODO handle errors?
+			bn = Utils.bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
+			numberOfMissingSN = (payl.length - MISSING_SN_START) / SN_LENGTH; //TODO handle errors?
+			missingSN = new int[numberOfMissingSN];
 			for (int i = 0; i < numberOfMissingSN; i++)
-				missingSN[i] = bytes2int(Arrays.copyOfRange
+				missingSN[i] = Utils.bytes2int(Arrays.copyOfRange
 						(payl, MISSING_SN_START + SN_LENGTH * i, MISSING_SN_START + SN_LENGTH * (i + 1)));
+		}
+		
+		
+		void generateAndUpdatePayload() {			
+			byte[] missingSNbytes = Utils.intarray2bytearray(missingSN, UTPpacket.SN_LENGTH);
+			byte[] bnBytes = Utils.int2bytes(bn, BN_END - BN_START + 1);
+			payl = new byte[missingSNbytes.length + MISSING_SN_START];
+			
+			System.arraycopy(missingSNbytes, 0, payl, MISSING_SN_START, missingSNbytes.length);
+			System.arraycopy(bnBytes, 0, payl, BN_START, bnBytes.length);
 		}
 	}
 

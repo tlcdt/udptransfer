@@ -65,16 +65,17 @@ public class Channel {
 			// ---- Process received packet and prepare new packet ----
 			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // payload of recv UDP datagram
 			UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
+			// FIXME: This is compatible only with our format. We should instead parse only the first 6 bytes of the payload.
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
 			int dstPort = (int)utpPkt.dstPort & 0xffff;
 			byte[] sendData = recvData; // useless but clear
 			
 			//DEBUG
-			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			Utils.logg("\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 //			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
 //				System.out.println("ACK " + utpPkt.sn);
-//			else
-//				System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
+			if (utpPkt.function == UTPpacket.FUNCT_DATA)
+				Utils.logg("SN=" + utpPkt.sn + "\tPayload length = " + utpPkt.payl.length);
 
 			
 			
@@ -125,6 +126,15 @@ public class Channel {
 
 	
 
+	
+	/**
+	 * Computes whether the channel should drop the current packet or forward it,
+	 * based on the packet drop probability, which depends on the length of the UDP
+	 * payload.
+	 * 
+	 * @param length
+	 * @return
+	 */
 	private static boolean mustDrop(int length) {
 		double discard_prob = 1 - Math.exp(-length/(double)1024);
 		boolean discard = new Random().nextDouble() <= discard_prob;
@@ -133,9 +143,18 @@ public class Channel {
 
 	
 
+	
+	/**
+	 * Returns a random delay for the current packet. The delay follows an exponential
+	 * distribution and depends on the length of the UDP payload.
+	 * 
+	 * @param length
+	 * @return
+	 */
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
 		double delay = -Math.log(new Random().nextDouble()) * mean;
+		delay = 400; //TODO
 		return Math.round(delay);
 	}
 	
