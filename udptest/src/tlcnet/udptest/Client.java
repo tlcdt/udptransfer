@@ -12,15 +12,15 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 256;
-	static final int BLOCK_SIZE = 100;
+	static final int PKT_SIZE = 768;
+	static final int BLOCK_SIZE = 200;
 
 	private static int channelPort = DEF_CHANNEL_PORT;
 	private static int dstPort = Server.DEF_SERVER_PORT;
 	
 	//private static int delayBeforeEob = 100;
 	
-	// TODO If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
+	// FIXME If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
 	
 	
@@ -317,6 +317,7 @@ public class Client
 				   after the server sends the EOB_ACK, and the client does not send anything, the server
 				   can close the connection.
 				*/
+				mustTx = true;
 				timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
 			} catch(SocketException e) {
 				System.err.println("Error while setting socket timeout");

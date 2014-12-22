@@ -24,7 +24,7 @@ public class Server {
 	// Initial blockSize. It is updated while receiving the first block.
 	// The array of flags for received packets, and the write buffer, have a size that
 	// depends on blockSize
-	private static final int INIT_BLOCKSIZE = 20; // TODO: this must be updated when receiving
+	private static final int INIT_BLOCKSIZE = 60; // TODO: this must be updated when receiving
 
 	private static final int INVALID_PKTSIZE = -1;
 
@@ -147,7 +147,7 @@ public class Server {
 
 
 			//DEBUG
-			//Utils.logg("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			//Utils.logg("Received  -  header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 			//Utils.logg("Received SN=" + recvUTPpkt.sn);
 			//Utils.logg("\nPayload length = " + recvUTPpkt.payl.length);
 
@@ -163,9 +163,10 @@ public class Server {
 				}
 				
 				// If this is still the first block but we're receiving data packets that exceed this block, then
-				// the block is actually larger than we thought: double blockSize and resize arrays as needed.
+				// the block is actually larger than we thought: update blockSize and resize arrays as needed.
 				if (bn==1 && recvUTPpkt.sn > blockSize) {
-					blockSize *= 2;
+					// At least double it to avoid too many resize operations, but this may not be enough so we use SN as well.
+					blockSize = Math.max(recvUTPpkt.sn, 2 * blockSize);
 					receivedPkts = Utils.resizeArray(receivedPkts, blockSize);
 					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * blockSize);
 				}
@@ -184,6 +185,7 @@ public class Server {
 					// Save total number of packets and bytes of the file
 					totNumPackets = recvUTPpkt.sn;
 					totNumBytes = (recvUTPpkt.sn - 1) * pktSize + recvUTPpkt.payl.length;
+					// TODO compute these counters along the way, not here at the end!
 				}
 
 				// Offset for SN: the first packet of block bn has SN=snOffset
@@ -196,13 +198,11 @@ public class Server {
 					if (recvUTPpkt.sn < snOffset)
 						duplicateCounter++;
 					else
-						// This never happens
+						// This should never happen
 						futureBlockArrivals++;
 					break;
 				}				
 
-				// TODO: writeBuffer and receivedPkts must grow if there are more packets than expected by INIT_BLOCKSIZE (only if this is bn==1)
-				
 				// Index [0, blockSize] of this packet in the current block
 				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % blockSize;
 				
@@ -236,43 +236,37 @@ public class Server {
 					// This is an EOB for a BN that was already ACKed (EOB_ACK was probably lost)
 					// so we retx the EOB_ACK for that BN.
 					
-					Utils.logg("EOB from old BN: retransmit BN");
-					// Assemble EOB_ACK
+					Utils.logg("EOB from old BN (BN=" + recvUTPpkt.endOfBlock.bn + " while currBN=" + bn + ") -> retransmit EOB_ACK");
+					// Assemble and send EOB_ACK
 					UTPpacket eobAckPkt = new UTPpacket();
 					eobAckPkt.sn = UTPpacket.INVALID_SN;
 					eobAckPkt.dstAddr = clientAddr;
 					eobAckPkt.dstPort = (short) clientPort;
 					eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
-					eobAckPkt.setEndOfBlockAck(bn, new int[0]);
-
-					// Send EOB_ACK
-					byte[] sendData = eobAckPkt.getRawData();
-					DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
-					try {
-						socket.send(sendPkt);
-					} catch(IOException e) {
-						System.err.println("I/O error while sending datagram:\n" + e);
-						socket.close(); System.exit(-1);
-					}
+					eobAckPkt.setEndOfBlockAck(recvUTPpkt.endOfBlock.bn, new int[0]);
+					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
+					
 					break;
 
 				}
 				else if (recvUTPpkt.endOfBlock.bn > bn) {
-					Utils.logg("! Wrong block number");
+					Utils.logg("! Block number of EOB is greater than current BN");
 					break;
 				}
 
-				//TODO: If bn==1, use sentSN to increase further the size of writeBuffer and receivedPkts
-
+				// Update blockSize with the final actual value (which may be smaller than current size)
 				if (bn == 1 && !blockSizeIsFinal) {
 					blockSize = recvUTPpkt.endOfBlock.numberOfSentSN;
 					blockSizeIsFinal = true;
-					Utils.resizeArray(receivedPkts, blockSize);
-					Utils.resizeArray(writeBuffer, blockSize);
+					receivedPkts = Utils.resizeArray(receivedPkts, blockSize);
+					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * blockSize);
 					Utils.logg("Final blockSize: " + blockSize + " packets");
 				}
 				
-				// Fill in the array with missing SNs
+				
+				
+				// -- Fill in the array with missing SNs
+				
 				int[] missingSN = new int[blockSize];
 				int missingSNindex = 0;
 				for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
@@ -281,23 +275,17 @@ public class Server {
 				}
 				missingSN = Arrays.copyOf(missingSN, missingSNindex); // Truncate
 
-				// Assemble EOB_ACK
+				
+				// -- Assemble and send EOB_ACK
+				
 				UTPpacket eobAckPkt = new UTPpacket();
 				eobAckPkt.sn = UTPpacket.INVALID_SN;
 				eobAckPkt.dstAddr = clientAddr;
 				eobAckPkt.dstPort = (short) clientPort;
 				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
 				eobAckPkt.setEndOfBlockAck(bn, missingSN);
-
-				// Send EOB_ACK
-				byte[] sendData = eobAckPkt.getRawData();
-				DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
-				try {
-					socket.send(sendPkt);
-				} catch(IOException e) {
-					System.err.println("I/O error while sending datagram:\n" + e);
-					socket.close(); System.exit(-1);
-				}
+				Utils.logg("Sending EOB ACK for BN=" + bn);
+				sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
 				if (missingSN.length == 0) {
 					// *This block has been received!*
@@ -340,5 +328,31 @@ public class Server {
 		Utils.logg(totNumBytes + " bytes received");
 		
 		System.out.println("Bye bye, Client! ;-)");
+	}
+
+
+
+
+
+	/**
+	 * Sends an UTP packet over UDP, using the predefined socket, to the remote address and port specified as parameters.
+	 * If an exception occurs, this method forces the process to exit.
+	 * 
+	 * @param utpPkt
+	 * @param socket
+	 * @param remoteAddr
+	 * @param remotePort
+	 */
+	private static void sendUtpPkt(UTPpacket utpPkt, DatagramSocket socket,	InetAddress remoteAddr, int remotePort) {
+
+		byte[] sendData = utpPkt.getRawData();
+		DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, remoteAddr, remotePort); 
+
+		try {
+			socket.send(sendPkt);
+		} catch(IOException e) {
+			System.err.println("I/O error while sending datagram:\n" + e);
+			socket.close(); System.exit(-1);
+		}
 	}
 }

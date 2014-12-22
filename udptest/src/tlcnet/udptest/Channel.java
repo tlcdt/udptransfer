@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
-	private static final int CORE_POOL_SIZE = 50; // TODO: check this
+	private static final int CORE_POOL_SIZE = 100; // TODO: check this
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
 	
@@ -22,6 +22,7 @@ public class Channel {
 	public static void main(String[] args) {
 		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
+//		int droppedPkts = 0;
 		
 		// --- Create listen and send sockets ---
 		
@@ -66,21 +67,27 @@ public class Channel {
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
 			int dstPort = (int)utpPkt.dstPort & 0xffff;
 			byte[] sendData = recvData; // useless but clear
-			
-			//DEBUG
-			//Utils.logg("\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-//			if (utpPkt.function == UTPpacket.FUNCT_DATA)
-//				Utils.logg("SN=" + utpPkt.sn);
 
-			
 			
 			// ---- Send packet ----
 			
 			if (mustDrop(utpPkt.payl.length)) {
 //				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+//				droppedPkts++;
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
+			
+			
+			//DEBUG
+			if (dstPort == Client.DEF_CLIENT_PORT)
+				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			else if (dstPort == Server.DEF_SERVER_PORT)
+				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+//			if (utpPkt.function == UTPpacket.FUNCT_DATA)
+//				Utils.logg("SN=" + utpPkt.sn);
+			
+			
 			
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
