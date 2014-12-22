@@ -12,11 +12,13 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 64;
+	static final int PKT_SIZE = 256;
 	static final int BLOCK_SIZE = 100;
 
-	static int channelPort = DEF_CHANNEL_PORT;
-	static int dstPort = Server.DEF_SERVER_PORT;
+	private static int channelPort = DEF_CHANNEL_PORT;
+	private static int dstPort = Server.DEF_SERVER_PORT;
+	
+	//private static int delayBeforeEob = 100;
 	
 	// TODO If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
@@ -142,6 +144,9 @@ public class Client
 
 				// -- Send EOB and wait for the proper ACK --
 
+				//try { Thread.sleep(delayBeforeEob);
+				//} catch (InterruptedException e1) {	e1.printStackTrace();}
+				
 				UTPpacket recvdEobUtpPkt = endOfBlockExchange(socket, bn, eobDatagram);
 				// EOB ACK has been received. Let's see what packets are missing and retransmit them.
 				Utils.logg("  Received EOB_ACK: " + recvdEobUtpPkt.endOfBlockAck.numberOfMissingSN + " missing packets in block BN=" + bn);

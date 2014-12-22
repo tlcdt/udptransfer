@@ -222,7 +222,7 @@ public class Server {
 				// Update receivedPkts array
 				receivedPkts[pktIndexInCurrBlock] = true;
 				
-				Utils.logg("Received SN=" + recvUTPpkt.sn);
+				//Utils.logg("Received SN=" + recvUTPpkt.sn);
 
 				break;
 
@@ -232,7 +232,32 @@ public class Server {
 
 			case UTPpacket.FUNCT_EOB:
 
-				if (recvUTPpkt.endOfBlock.bn != bn) {
+				if (recvUTPpkt.endOfBlock.bn < bn) {
+					// This is an EOB for a BN that was already ACKed (EOB_ACK was probably lost)
+					// so we retx the EOB_ACK for that BN.
+					
+					Utils.logg("EOB from old BN: retransmit BN");
+					// Assemble EOB_ACK
+					UTPpacket eobAckPkt = new UTPpacket();
+					eobAckPkt.sn = UTPpacket.INVALID_SN;
+					eobAckPkt.dstAddr = clientAddr;
+					eobAckPkt.dstPort = (short) clientPort;
+					eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
+					eobAckPkt.setEndOfBlockAck(bn, new int[0]);
+
+					// Send EOB_ACK
+					byte[] sendData = eobAckPkt.getRawData();
+					DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
+					try {
+						socket.send(sendPkt);
+					} catch(IOException e) {
+						System.err.println("I/O error while sending datagram:\n" + e);
+						socket.close(); System.exit(-1);
+					}
+					break;
+
+				}
+				else if (recvUTPpkt.endOfBlock.bn > bn) {
 					Utils.logg("! Wrong block number");
 					break;
 				}

@@ -69,22 +69,22 @@ public class Channel {
 			
 			//DEBUG
 			//Utils.logg("\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			if (utpPkt.function == UTPpacket.FUNCT_DATA)
-				Utils.logg("SN=" + utpPkt.sn);
+//			if (utpPkt.function == UTPpacket.FUNCT_DATA)
+//				Utils.logg("SN=" + utpPkt.sn);
 
 			
 			
 			// ---- Send packet ----
 			
 			if (mustDrop(utpPkt.payl.length)) {
-				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+//				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
 			
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
-			Utils.logg("Delay=" + rndDelay + " ms");
+//			Utils.logg("Delay=" + rndDelay + " ms");
 			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
 
 		}
@@ -141,7 +141,7 @@ public class Channel {
 	 */
 	private static boolean mustDrop(int length) {
 		double discard_prob = 1 - Math.exp(-length/(double)1024);
-		discard_prob = 0.3; // fixed probability: useful for testing loss of control packets
+		//discard_prob = 0.3; // fixed probability: useful for testing loss of control packets
 		boolean discard = new Random().nextDouble() <= discard_prob;
 		return discard;
 	}
