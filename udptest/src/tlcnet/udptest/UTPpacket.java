@@ -15,8 +15,6 @@ public class UTPpacket {
 	static final int FUNCT_FILEINFO_ACK = 4;
 	static final int FUNCT_EOB = 5;	// endofblock
 	static final int FUNCT_EOB_ACK = 6;
-	static final int FUNCT_FIN = 42;
-	static final int FUNCT_ACKFIN = 43;
 	
 	static final int DSTADDR_START  = 0;  // 4
 	static final int DSTADDR_END    = 3;

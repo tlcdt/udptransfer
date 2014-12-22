@@ -12,11 +12,13 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 256;
+	static final int PKT_SIZE = 32;
 	static final int BLOCK_SIZE = 50;
 
 	static int channelPort = DEF_CHANNEL_PORT;
 	static int dstPort = Server.DEF_SERVER_PORT;
+	
+	// TODO If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
 	public static void main(String args[]) throws IOException
 	{
@@ -72,8 +74,11 @@ public class Client
 		// * * * * * * * * * * * * * *//
 
 
-		//long startTransferTime = System.currentTimeMillis();
-		int bn = 1; // block number
+		// Start stopwatch
+		long startTransferTime = System.currentTimeMillis();
+		
+		// Current block number
+		int bn = 1;
 
 		// This is used to read from file enough data to fill a block
 		ByteBuffer chunkContainer = ByteBuffer.allocate(PKT_SIZE * BLOCK_SIZE); // TODO: read even more than one block for better performance?
@@ -120,6 +125,7 @@ public class Client
 			// --- The block has been sent, now we must send ENDOFBLOCK to get a feedback
 
 			while(true) {
+				
 				// -- Initialize variables for ENDOFBLOCK packet --
 
 				UTPpacket sendUTPpkt = new UTPpacket();
@@ -136,11 +142,13 @@ public class Client
 
 				UTPpacket recvUTPpkt = endOfBlockExchange(socket, bn, sendPkt);
 				// EOB ACK has been received. Let's see what packets are missing and retransmit them.
-				Utils.logg("\nReceived EOB_ACK: " + recvUTPpkt.endOfBlockAck.numberOfMissingSN + " missing packets in block BN=" + bn);
-
+				Utils.logg("  Received EOB_ACK: " + recvUTPpkt.endOfBlockAck.numberOfMissingSN + " missing packets in block BN=" + bn);
+				// TODO: send EOB after a certain time that depends on the observed delay. Otherwise some pkts are received correctly after the EOB and therefore are uselessly retransmitted
+				
 				// If everything has been received, go ahead to the next block
 				if (recvUTPpkt.endOfBlockAck.numberOfMissingSN == 0) {
 					bn++;
+					Utils.logg("");
 					break;
 				}
 				
@@ -164,218 +172,21 @@ public class Client
 					socket.close(); theFile.close(); System.exit(-1);
 				}
 
-			}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-			/* * ** *  * * * * ** NOW WHAT? * * * * ** *  */
-
-
-
-			/*			//boolean acked = false;
-			//int timeout = ACK_TIMEOUT;
-			while (!acked) {			
-
-
-
-
-				// ---- Receive packet ----
-
-				byte[] recvBuf = new byte[RX_BUFSIZE];
-				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-				socket.setSoTimeout(timeout);
-				long timerStart = System.currentTimeMillis();
-				try{
-					socket.receive(recvPkt);
-				}
-				catch (SocketTimeoutException e) {
-
-					// **CASE 1**
-					// The ACK for the current SN has timed out.
-					System.out.println("\n!ACK missing for SN=" + sn + "\nRetransmitting");
-					timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
-					// We will now tx with the same SN
-				}
-				catch(IOException e) {
-					System.err.println("I/O error while receiving datagram:\n" + e);
-					socket.close(); System.exit(-1);
-				}
-
-				// Packet received before timeout! Compute the "used up" timeout (only used if old ACK)
-				int usedTimeout = (int) (System.currentTimeMillis() - timerStart);
-
-
-
-
-
-				// ---- Process received packet ----
-
-				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
-				UTPpacket recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
-
-				//DEBUG
-//				System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-//				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
-//					System.out.println("ACK " + recvUTPpkt.sn);
-//				else
-//					System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
-
-				if (recvUTPpkt.sn != sn) {
-					// **CASE 3**
-					// This is an _old_ ACK:
-					//   - the timer keeps running because it's a timer for the current SN;
-					//   - no retransmission.
-					System.out.println("ACK with old SN (SN=" + recvUTPpkt.sn + " < currSN=" + sn + "): ignore");
-					timeout -= usedTimeout; // timeout>0 since the pkt was received before the timeout
-					if (timeout < 1)  // In practice there are some errors: timeout can be slightly negative so we
-						timeout = 1;  // force it to be positive (not zero, otherwise receive() would be blocking)
-					mustTx = false;
-				}
-
-				else {
-					// **CASE 4**
-					// Current SN was ACKed: default timeout for next tx-rx loop is restored
-					// at the beginning of the loop.
-					acked = true;
-				}
-			}
-
-
-			// Increase counter only when current SN was ACKed
-			bn++;
-		}
-		inChannel.close();
-		theFile.close();
-
-			 * * END OF DATA TRANSFER LOOP * * 
-		double transmissionSec = (double) (System.currentTimeMillis() - startTransferTime)/1000;
-
-
-
-
-
-
-
-
-
-		// * * * * * * * * * * * * * //
-		// * *  SEND FIN PACKET  * * //
-		// * * * * * * * * * * * * * //
-
-		UTPpacket sendUTPpkt = new UTPpacket();
-		sendUTPpkt.sn = sn;
-		sendUTPpkt.dstAddr = dstAddr;
-		sendUTPpkt.dstPort = (short)dstPort;
-		sendUTPpkt.payl = new byte[0];	
-		sendUTPpkt.function = UTPpacket.FUNCT_FIN;
-		byte[] sendData = sendUTPpkt.getRawData();
-		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
-
-
-		boolean acked = false;
-		boolean mustTx = true;
-		int timeout = ACK_TIMEOUT;
-		while (!acked) {			
-
-			// --- Send UDP datagram (FIN) ---
-			if (mustTx) {
-				try {
-					System.out.println("\n------\nSending FIN");
-					socket.send(sndPkt);
-				}
-				catch(IOException e) {
-					System.err.println("I/O error while sending FIN datagram");
-					socket.close(); System.exit(-1);;
-				}
-			}
-
-
-			// Must receive something before sending another pkt.
-			// Set timeout for current SN. If other ACKs are received, ignore them and 
-			// wait again to receive after updating the timeout.
-
-			// ---- Receive packet ----
-			byte[] recvBuf = new byte[RX_BUFSIZE];
-			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-			socket.setSoTimeout(timeout);
-			long timerStart = System.currentTimeMillis();
-			try{
-				socket.receive(recvPkt);
-			}
-			catch (SocketTimeoutException e) {
-
-				// **CASE 1**
-				// The FINACK has timed out.
-				System.out.println("\n!FINACK missing\nRetransmitting");
-				timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
-			}
-			catch(IOException e) {
-				System.err.println("I/O error while receiving datagram:\n" + e);
-				socket.close(); System.exit(-1);
-			}
-
-			// Packet received before timeout! Compute the "used up" timeout (only used if old ACK)
-			int usedTimeout = (int) (System.currentTimeMillis() - timerStart);
-
-
-
-
-			// ---- Process received packet ----
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
-			UTPpacket recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
-
-			//DEBUG
-			System.out.println("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-//			if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
-//				System.out.println("ACK " + recvUTPpkt.sn);
-//			else if (recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN)
-//				System.out.println("ACKFIN " + recvUTPpkt.sn);
-//			else
-//				System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
-
-
-			if (recvUTPpkt.function != UTPpacket.FUNCT_ACKFIN) {
-				// **CASE 2**
-				// This is not a FINACK:
-				//   - the timer keeps running because it's a timer for the FINACK timeout;
-				//   - no FIN retransmission.
-				System.out.println("!Not a FINACK");
-				timeout -= usedTimeout; // timeout>0 since the pkt was received before the timeout
-				if (timeout < 1)  // In practice there are some errors: timeout can be slightly negative so we
-					timeout = 1;  // force it to be positive (not zero, otherwise receive() would be blocking)
-				mustTx = false;
-			}
-
-			else {
-				// **CASE 3**
-				// Received a FINACK: done.
-				acked = true;
-				System.out.println("Yay. Transmission complete: it took " + transmissionSec + " s. Merry Christmas :(");
-			}
-			 */
-		}
-
-
-
-
+			}			
+		} // while not eof
+		
+		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
+		System.out.println("File transfer complete! :(");
+		System.out.println("Elapsed time: " + elapsedTime + " s");
 	}
 
+	
+	
+	
+	
+	
+	
+	
 
 
 	/**
@@ -395,6 +206,8 @@ public class Client
 		// Offset for SN: the first packet of block bn has SN=snOffset
 		int snOffset = 1 + BLOCK_SIZE * (bn - 1);
 
+		Utils.logg("- Sending " + Utils.count(toBeSent, true) + " packets from BN=" + bn);
+		
 		// Loop through packets in the current block, and send them away recklessly
 		// Note that this loop may exceed the actual number of packets in this block, hence those dummy
 		// packets must always be flagged as "not to be sent".
@@ -432,16 +245,19 @@ public class Client
 
 			// --- Send UDP datagram ---
 
-			Utils.logg("\n----Sending SN=" + sendUTPpkt.sn);
+			//Utils.logg("Sending SN=" + sendUTPpkt.sn);
 			socket.send(sndPkt);
 		}
 	}
 
 
+	
+	
 
 	/**
 	 * This method sends an EndOfBlock packet to the destination, in order to notify the delivery of a block.
-	 * Then it waits to receive an EndOfBlockAck for the current Block Number. Other received packets are discarded.
+	 * Then it waits to receive an EndOfBlockAck for the current Block Number, in a  stop-and-wait fashion.
+	 * Other received packets are discarded.
 	 * 
 	 * @param socket the socket this class is communicating on. It will be used to transmit the EOB and receive the EOB_ACK.
 	 * @param bn the current Block Number
@@ -460,7 +276,7 @@ public class Client
 			// --- Send UDP datagram (ENDOFBLOCK) ---
 			if (mustTx) {
 				try {
-					Utils.logg("\n------\nSending EOB");
+					Utils.logg("  Sending EOB " + bn);
 					socket.send(sndPkt);
 				} catch(IOException e) {
 					System.err.println("I/O error while sending EOB datagram");
@@ -485,7 +301,7 @@ public class Client
 
 				// **CASE 1**
 				// The EOB_ACK has timed out.
-				Utils.logg("\n!EOB_ACK missing\nRetransmitting");
+				Utils.logg("! EOB_ACK missing: retransmitting");
 				timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
 			} catch(SocketException e) {
 				System.err.println("Error while setting socket timeout");
@@ -507,18 +323,14 @@ public class Client
 			recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
 
 			//DEBUG
-			Utils.logg("\n------ RECEIVED\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			//				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)
-			//					System.out.println("ACK " + recvUTPpkt.sn);
-			//				else
-			//					System.out.println("SN=" + recvUTPpkt.sn + "\nPayload length = " + recvUTPpkt.payl.length);
+			//Utils.logg("\n - Received\nHeader: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 
 			if (recvUTPpkt.function != UTPpacket.FUNCT_EOB_ACK) {
 				// **CASE 2**
 				// This is not a EOB_ACK packet:
 				//   - the timer keeps running because it's a timer for the FUNCT_ACK packet timeout;
 				//   - no FUNCT packet retransmission.
-				Utils.logg("!Not an EOB_ACK");
+				Utils.logg("! Not an EOB_ACK");
 				timeout -= usedTimeout; // timeout>0 since the pkt was received before the timeout
 				if (timeout < 1)  // In practice there are some errors: timeout can be slightly negative so we
 					timeout = 1;  // force it to be positive (not zero, otherwise receive() would be blocking)
@@ -530,7 +342,7 @@ public class Client
 				// This is an _old_ EOB_ACK:
 				//   - the timer keeps running because it's a timer for the current SN;
 				//   - no retransmission.
-				Utils.logg("EOB_ACK with old BN (BN=" + recvUTPpkt.endOfBlockAck.bn + " < currBN=" + bn + "): ignore");
+				Utils.logg("EOB_ACK with wrong BN (BN=" + recvUTPpkt.endOfBlockAck.bn + ", currBN=" + bn + "): ignore");
 				timeout -= usedTimeout; // timeout>0 since the pkt was received before the timeout
 				if (timeout < 1)  // In practice there are some errors: timeout can be slightly negative so we
 					timeout = 1;  // force it to be positive (not zero, otherwise receive() would be blocking)

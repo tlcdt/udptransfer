@@ -70,6 +70,43 @@ public class Utils {
 	
 	
 	
+	
+	public static int count(Object[] array, Object value) {
+		int counter = 0;
+		for (Object object : array) {
+			if (object.equals(value))
+				counter++;
+		}
+		
+		return counter;
+	}
+	
+	
+	public static int count(boolean[] array, boolean value) {
+		int counter = 0;
+		for (Object object : array) {
+			if (object.equals(value))
+				counter++;
+		}
+		
+		return counter;
+	}
+
+	
+	public static byte[] resizeArray(byte[] array, int newSize) {
+		byte[] newArray = new byte[newSize];
+		System.arraycopy(array, 0, newArray, 0, Math.min(newSize, array.length));
+		return newArray;
+	}
+	
+	
+	public static boolean[] resizeArray(boolean[] array, int newSize) {
+		boolean[] newArray = new boolean[newSize];
+		System.arraycopy(array, 0, newArray, 0, Math.min(newSize, array.length));
+		return newArray;
+	}
+	
+	
 	public static void logg(Object obj) {
 		System.out.println(obj);
 	}

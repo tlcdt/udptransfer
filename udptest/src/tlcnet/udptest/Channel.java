@@ -71,24 +71,22 @@ public class Channel {
 			byte[] sendData = recvData; // useless but clear
 			
 			//DEBUG
-			Utils.logg("\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-//			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
-//				System.out.println("ACK " + utpPkt.sn);
+			//Utils.logg("\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
 			if (utpPkt.function == UTPpacket.FUNCT_DATA)
-				Utils.logg("SN=" + utpPkt.sn + "\tPayload length = " + utpPkt.payl.length);
+				Utils.logg("SN=" + utpPkt.sn);
 
 			
 			
 			// ---- Send packet ----
 			
 			if (mustDrop(utpPkt.payl.length)) {
-				System.out.println("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
-			System.out.println("Delay=" + rndDelay + " ms");
+			Utils.logg("Delay=" + rndDelay + " ms");
 			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
 
 		}
@@ -154,7 +152,7 @@ public class Channel {
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
 		double delay = -Math.log(new Random().nextDouble()) * mean;
-		delay = 400; //TODO
+		//delay = Math.round(Math.random() * 1600 + 20);
 		return Math.round(delay);
 	}
 	
