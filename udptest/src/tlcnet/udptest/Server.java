@@ -86,6 +86,7 @@ public class Server {
 		// * * * * * * * * * * * * * *//
 
 
+		// The write buffer holds 
 		byte[] writeBuffer = null;
 	
 		// File statistics
@@ -137,20 +138,12 @@ public class Server {
 
 
 
-			// ---- Process packet and prepare new packet ----
+			// ---- Process packet ----
 
 			// payload of received UDP packet
 			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());
 			UTPpacket recvUTPpkt = new UTPpacket(recvData);			// parse payload
 			InetAddress channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
-
-
-			// TODO: this is not the right place for these lines.
-			UTPpacket sendUTPpkt = new UTPpacket();
-			sendUTPpkt.dstAddr = clientAddr;
-			sendUTPpkt.dstPort = (short) clientPort;
-			sendUTPpkt.sn = recvUTPpkt.sn;
-			sendUTPpkt.payl = new byte[0];
 
 
 			//DEBUG

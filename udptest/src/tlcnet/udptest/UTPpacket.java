@@ -33,25 +33,39 @@ public class UTPpacket {
 	int sn = INVALID_SN;
 	byte function = FUNCT_INVALID;
 	byte[] payl = null;
-	FileInfo fileInfo = null;
 	EndOfBlock endOfBlock = null;
 	EndOfBlockAck endOfBlockAck = null;
 
 	
-	
+	/**
+	 * Creates a new UTPpacket without initializing its fields. The fields should be set manually,
+	 * and then the content of the packet in byte[] form is created and returned by getRawData()
+	 */
 	public UTPpacket() {
 		super();
 	}
 	
 	
-	
+	/**
+	 * Creates a new UTPpacket from its representation as byte array. This representation is in fact
+	 * the payload of the enclosing UDP packet.
+	 * This constructor parses the byte array and initializes all fields of this UTPpacket accordingly.
+	 * 
+	 * @param rawData - the byte array that represents an UTPpacket (and the payload of the corresponding
+	 * enclosing UDP packet)
+	 */
 	public UTPpacket(byte[] rawData) {
 		super();
 		parseData(rawData);
 	}
 
 	
-	
+	/**
+	 * Parses a byte array representation of an UTP packet (e.g. the payload of the enclosing UDP packet)
+	 * and updates all fields of this instance of UTPpacket, that can be later directly accessed from
+	 * outside this class. 
+	 * @param rawData - the byte array representation of an UTP packet to be parsed
+	 */
 	private void parseData(byte[] rawData) {
 		try {
 			dstAddr = InetAddress.getByAddress(Arrays.copyOfRange(rawData, DSTADDR_START, DSTADDR_END+1));
@@ -64,15 +78,9 @@ public class UTPpacket {
 		sn = Utils.bytes2int(Arrays.copyOfRange(rawData, SN_START, SN_END+1));
 		function = rawData[FUNCT_START];
 		payl = Arrays.copyOfRange(rawData, PAYL_START, rawData.length);
-		
-		// FileInfo packet
-		if (function == FUNCT_FILEINFO) {
-			fileInfo = new FileInfo(payl);
-			// Now the dimension of a block is accessible through this object
-		}
-		
+
 		// This is an EndOfBlock packet
-		else if (function == FUNCT_EOB) {
+		if (function == FUNCT_EOB) {
 			endOfBlock = new EndOfBlock(payl);
 		}
 		
@@ -84,6 +92,12 @@ public class UTPpacket {
 	
 	
 	
+	/**
+	 * Returns the byte array representation of this UTPpacket, based on the fields of this object,
+	 * that must therefore be initialized manually or with the constructor UTPpacket(byte[]).
+	 * 
+	 * @return the byte array representation of this UTPpacket
+	 */
 	public byte[] getRawData() {
 		
 		byte[] rawData = new byte[HEADER_LENGTH + payl.length];
@@ -97,12 +111,14 @@ public class UTPpacket {
 		return rawData;
 	}
 	
+	
+	
 
 	/**
 	 * Initializes the fields of the object this.endOfBlockAck, and then updates the payload of this UTPpacket.
 	 * 
-	 * @param bn Block number for this EOB_ACK packet
-	 * @param missingSN Array of Sequence Numbers corresponding to packets that were not received
+	 * @param bn - block number for this EOB_ACK packet
+	 * @param missingSN - array of Sequence Numbers corresponding to packets that were not received
 	 */
 	public void setEndOfBlockAck(int bn, int[] missingSN) {
 
@@ -123,8 +139,8 @@ public class UTPpacket {
 	/**
 	 * Initializes the fields of the object this.endOfBlock, and then updates the payload of this UTPpacket.
 	 * 
-	 * @param bn Block number for this EOB packet
-	 * @param numberOfSentSN Number of packets of this block that have been sent. This should be always the same
+	 * @param bn - block number for this EOB packet
+	 * @param numberOfSentSN - number of packets of this block that have been sent. This should be always the same
 	 * except for the last block.
 	 */
 	public void setEndOfBlock(int bn, int numberOfSentSN) {
@@ -145,26 +161,15 @@ public class UTPpacket {
 
 	
 	
+
 	
-	
-	
-	public class FileInfo {
-		
-		static final int BLOCKDIM_START  = 0;  // 4
-		static final int BLOCKDIM_END    = 3;
-		static final int FILEINFO_LENGTH = 4;
-		static final int BLOCKDIM_LENGTH = BLOCKDIM_END - BLOCKDIM_START + 1;
-		
-		int blockDim = 0;
-		
-		FileInfo(byte[] payl) {
-			super();
-			blockDim = Utils.bytes2int(Arrays.copyOfRange(payl, BLOCKDIM_START, BLOCKDIM_END));
-		}
-		
-	}
-	
-	
+	/**
+	 * An instance of this class represents the payload of an EOB packet, and allows to initialize it
+	 * or parse it through the enclosing class UTPpacket. An instance of UTPpacket can have an instance
+	 * of this class as a field: it is created when parsing a byte array that represents an EOB UTPpacket
+	 * (by means of the constructor of UTPpacket), or when setEndOfBlock is called on a UTPpacket object
+	 * (this is useful for creating a new EOB packet from scratch).
+	 */
 	public class EndOfBlock {
 		
 		private static final int BN_START = 0;
@@ -176,11 +181,11 @@ public class UTPpacket {
 		int bn = 0;
 		int numberOfSentSN = -1;
 		
-		public EndOfBlock() {
+		private EndOfBlock() {
 			super();
 		}
 		
-		public EndOfBlock(byte[] payl) {
+		private EndOfBlock(byte[] payl) {
 			super();
 			bn = Utils.bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
 			numberOfSentSN = Utils.bytes2int(Arrays.copyOfRange
@@ -188,7 +193,7 @@ public class UTPpacket {
 		}
 		
 		
-		void generateAndUpdatePayload() {
+		private void generateAndUpdatePayload() {
 			payl = new byte[PAYL_LENGTH];
 			byte[] bnBytes = Utils.int2bytes(bn, BN_END - BN_START + 1);
 			byte[] numSentSnBytes = Utils.int2bytes(numberOfSentSN, NUMBER_SENT_SN_END - NUMBER_SENT_SN_START + 1);
@@ -199,24 +204,32 @@ public class UTPpacket {
 	}
 	
 	
+	
+	
+	
+	/**
+	 * An instance of this class represents the payload of an EOB_ACK packet, and allows to initialize it
+	 * or parse it through the enclosing class UTPpacket. An instance of UTPpacket can have an instance
+	 * of this class as a field: it is created when parsing a byte array that represents an EOB_ACK UTPpacket
+	 * (by means of the constructor of UTPpacket), or when setEndOfBlock is called on a UTPpacket object
+	 * (this is useful for creating a new EOB_ACK packet from scratch).
+	 */
 	public class EndOfBlockAck {
 		private static final int BN_START = 0;
 		private static final int BN_END = 3;
 		private static final int MISSING_SN_START = 4;
-		
-		// SN_LENGTH can be reached from down here (y)
 
 		int bn = -1;
 		int[] missingSN = null;
 		int numberOfMissingSN = -1;
 		
 		
-		public EndOfBlockAck() {
-			
+		private EndOfBlockAck() {
+			super();
 		}
 		
 		
-		public EndOfBlockAck(byte[] payl) {
+		private EndOfBlockAck(byte[] payl) {
 			super();
 			bn = Utils.bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
 			numberOfMissingSN = (payl.length - MISSING_SN_START) / SN_LENGTH; //TODO handle errors?
@@ -227,7 +240,7 @@ public class UTPpacket {
 		}
 		
 		
-		void generateAndUpdatePayload() {			
+		private void generateAndUpdatePayload() {			
 			byte[] missingSNbytes = Utils.intarray2bytearray(missingSN, UTPpacket.SN_LENGTH);
 			byte[] bnBytes = Utils.int2bytes(bn, BN_END - BN_START + 1);
 			payl = new byte[missingSNbytes.length + MISSING_SN_START];

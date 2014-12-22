@@ -12,14 +12,16 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 32;
-	static final int BLOCK_SIZE = 50;
+	static final int PKT_SIZE = 64;
+	static final int BLOCK_SIZE = 100;
 
 	static int channelPort = DEF_CHANNEL_PORT;
 	static int dstPort = Server.DEF_SERVER_PORT;
 	
 	// TODO If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
+	
+	
 	public static void main(String args[]) throws IOException
 	{
 		InetAddress channelAddr;
@@ -128,25 +130,25 @@ public class Client
 				
 				// -- Initialize variables for ENDOFBLOCK packet --
 
-				UTPpacket sendUTPpkt = new UTPpacket();
-				sendUTPpkt.sn = UTPpacket.INVALID_SN;
-				sendUTPpkt.dstAddr = dstAddr;
-				sendUTPpkt.dstPort = (short)dstPort;
-				sendUTPpkt.function = UTPpacket.FUNCT_EOB;
-				sendUTPpkt.setEndOfBlock(bn, numPacketsInThisBlock);
-				byte[] sendData = sendUTPpkt.getRawData();
-				DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
+				UTPpacket eobUtpPkt = new UTPpacket();
+				eobUtpPkt.sn = UTPpacket.INVALID_SN;
+				eobUtpPkt.dstAddr = dstAddr;
+				eobUtpPkt.dstPort = (short)dstPort;
+				eobUtpPkt.function = UTPpacket.FUNCT_EOB;
+				eobUtpPkt.setEndOfBlock(bn, numPacketsInThisBlock);
+				byte[] eobData = eobUtpPkt.getRawData();
+				DatagramPacket eobDatagram = new DatagramPacket(eobData, eobData.length, channelAddr, channelPort);
 
 
 				// -- Send EOB and wait for the proper ACK --
 
-				UTPpacket recvUTPpkt = endOfBlockExchange(socket, bn, sendPkt);
+				UTPpacket recvdEobUtpPkt = endOfBlockExchange(socket, bn, eobDatagram);
 				// EOB ACK has been received. Let's see what packets are missing and retransmit them.
-				Utils.logg("  Received EOB_ACK: " + recvUTPpkt.endOfBlockAck.numberOfMissingSN + " missing packets in block BN=" + bn);
+				Utils.logg("  Received EOB_ACK: " + recvdEobUtpPkt.endOfBlockAck.numberOfMissingSN + " missing packets in block BN=" + bn);
 				// TODO: send EOB after a certain time that depends on the observed delay. Otherwise some pkts are received correctly after the EOB and therefore are uselessly retransmitted
 				
 				// If everything has been received, go ahead to the next block
-				if (recvUTPpkt.endOfBlockAck.numberOfMissingSN == 0) {
+				if (recvdEobUtpPkt.endOfBlockAck.numberOfMissingSN == 0) {
 					bn++;
 					Utils.logg("");
 					break;
@@ -157,8 +159,8 @@ public class Client
 
 				// Flag packets to be retransmitted
 				Arrays.fill(toBeSent, false);
-				for (int i = 0; i < recvUTPpkt.endOfBlockAck.numberOfMissingSN; i++) {
-					int indexOfMissingSN = (recvUTPpkt.endOfBlockAck.missingSN[i] - 1) % BLOCK_SIZE;
+				for (int i = 0; i < recvdEobUtpPkt.endOfBlockAck.numberOfMissingSN; i++) {
+					int indexOfMissingSN = (recvdEobUtpPkt.endOfBlockAck.missingSN[i] - 1) % BLOCK_SIZE;
 					//Utils.logg("missing" + recvUTPpkt.endOfBlockAck.missingSN[i]);
 					toBeSent[indexOfMissingSN] = true;
 					//Utils.logg("    ---      TOBESENT = " + (indexOfMissingSN + 1 + BLOCK_SIZE * (bn - 1)));
@@ -302,6 +304,14 @@ public class Client
 				// **CASE 1**
 				// The EOB_ACK has timed out.
 				Utils.logg("! EOB_ACK missing: retransmitting");
+				/* TODO: if the EOB_ACK of the last block contains 0 missing SN and it's lost, then
+				   the client is disconnected and won't reply. We need a timeout on EOB_ACK missing
+				   (and in general, timeouts for everything).
+				   Or even better, the server waits some seconds before shutting down, so that, if the
+				   client has missed the EOB_ACK, the server receives a solicitation (EOB). Some time
+				   after the server sends the EOB_ACK, and the client does not send anything, the server
+				   can close the connection.
+				*/
 				timeout = ACK_TIMEOUT; continue;   // Reset timeout and go to while(!acked).
 			} catch(SocketException e) {
 				System.err.println("Error while setting socket timeout");

@@ -29,15 +29,13 @@ public class Channel {
 		DatagramSocket outSocket = null;
 		try {
 			listenSocket = new DatagramSocket(listenPort);
-		}
-		catch(SocketException e) {
+		} catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
 		}
 		try {
 			outSocket = new DatagramSocket(); // any available local port
-		}
-		catch (SocketException e) {
+		} catch (SocketException e) {
 			System.err.println("Error creating a datagram socket:\n" + e);
 			listenSocket.close(); System.exit(-1);
 		}
@@ -53,10 +51,9 @@ public class Channel {
 			// ---- Receive packet ----
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-			try{
+			try {
 				listenSocket.receive(recvPkt);
-			}
-			catch(IOException e) {
+			} catch(IOException e) {
 				System.err.println("I/O error while receiving datagram:\n" + e);
 				listenSocket.close(); outSocket.close(); System.exit(-1);
 			}
@@ -84,6 +81,7 @@ public class Channel {
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
+			
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
 			Utils.logg("Delay=" + rndDelay + " ms");
@@ -94,7 +92,15 @@ public class Channel {
 		
 	}
 
+
 	
+	/**
+	 * This is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay
+	 * that was decided for the current packet. In order to perform the task of sending the packet,
+	 * this class needs to be passed the packet itself, together with the input and output socket
+	 * (the input socket is only needed because it must be closed if an error occurs).
+	 *
+	 */
 	private static class SendDelayedPacket implements Runnable
 	{
 		private DatagramSocket dstSock;
@@ -130,11 +136,12 @@ public class Channel {
 	 * based on the packet drop probability, which depends on the length of the UDP
 	 * payload.
 	 * 
-	 * @param length
-	 * @return
+	 * @param length - the length of the UTP packet (i.e. of the UDP payload)
+	 * @return true if the current packet must be dropped, false if it must be forwarded to its destination
 	 */
 	private static boolean mustDrop(int length) {
 		double discard_prob = 1 - Math.exp(-length/(double)1024);
+		discard_prob = 0.3; // fixed probability: useful for testing loss of control packets
 		boolean discard = new Random().nextDouble() <= discard_prob;
 		return discard;
 	}
@@ -143,11 +150,11 @@ public class Channel {
 
 	
 	/**
-	 * Returns a random delay for the current packet. The delay follows an exponential
+	 * Returns the random delay that the current packet must experience. The delay follows an exponential
 	 * distribution and depends on the length of the UDP payload.
 	 * 
-	 * @param length
-	 * @return
+	 * @param length - the length of the UTP packet (i.e. of the UDP payload)
+	 * @return a random delay for the current packet 
 	 */
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
