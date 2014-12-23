@@ -285,7 +285,9 @@ public class Server {
 				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
 				eobAckPkt.setEndOfBlockAck(bn, missingSN);
 				Utils.logg("Sending EOB ACK for BN=" + bn);
-				sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
+				int numOfEobAckTx = missingSN.length / 50 + 2;
+				for (int i=0; i < numOfEobAckTx; i++)
+					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
 				if (missingSN.length == 0) {
 					// *This block has been received!*

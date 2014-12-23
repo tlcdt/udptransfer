@@ -2,6 +2,7 @@ package tlcnet.udptest;
 
 import java.io.*;
 import java.net.*;
+import java.text.DecimalFormat;
 import java.util.Arrays;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -12,8 +13,8 @@ public class Client
 	private static final short ACK_TIMEOUT = 2000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 768;
-	static final int BLOCK_SIZE = 200;
+	static final int PKT_SIZE = 640;
+	static final int BLOCK_SIZE = 900;
 
 	private static int channelPort = DEF_CHANNEL_PORT;
 	private static int dstPort = Server.DEF_SERVER_PORT;
@@ -81,8 +82,9 @@ public class Client
 		// Start stopwatch
 		long startTransferTime = System.currentTimeMillis();
 		
-		// Current block number
-		int bn = 1;
+		
+		int bn = 1;				// Current block number
+		int totBytesSent = 0;	// Counter for total bytes sent
 
 		// This is used to read from file enough data to fill a block
 		ByteBuffer chunkContainer = ByteBuffer.allocate(PKT_SIZE * BLOCK_SIZE); // TODO: read even more than one block for better performance?
@@ -95,8 +97,9 @@ public class Client
 			// Now that the buffer is full, flip it in order to perform read operations on it
 			chunkContainer.flip();
 
-			// Bytes of actual data in the current block
+			// Bytes of actual data in the current block. Update total byte counter
 			int bytesInCurrBlock = chunkContainer.remaining();
+			totBytesSent += bytesInCurrBlock;
 
 			// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 			byte[] txBuffer = new byte[PKT_SIZE * BLOCK_SIZE];	
@@ -183,8 +186,11 @@ public class Client
 		} // while not eof
 		
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
+		double transferRate = totBytesSent / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
+		System.out.println(totBytesSent + " bytes sent");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
+		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
 	}
 
 	
