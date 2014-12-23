@@ -10,8 +10,7 @@ import java.net.UnknownHostException;
 import java.text.DecimalFormat;
 import java.util.Arrays;
 
-/* TODO: What if the Server starts listening after the Client has started transmitting?
- */
+// TODO: What if the Server starts listening after the Client has started transmitting?
 
 
 public class Server {
@@ -147,8 +146,8 @@ public class Server {
 
 
 			//DEBUG
-			//Utils.logg("Received  -  header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			//Utils.logg("Received SN=" + recvUTPpkt.sn);
+			//Utils.logg("    Received  -  header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+			//Utils.logg("    Received SN=" + recvUTPpkt.sn);
 			//Utils.logg("\nPayload length = " + recvUTPpkt.payl.length);
 
 
@@ -194,7 +193,7 @@ public class Server {
 				// If the current packet belongs to a different block, discard it.
 				// TODO Handle timeout
 				if (recvUTPpkt.sn < snOffset || recvUTPpkt.sn >= snOffset + blockSize) {
-					Utils.logg("Received SN=" + recvUTPpkt.sn + " -> discard (wrong block)");
+					//Utils.logg("Received SN=" + recvUTPpkt.sn + " -> discard (wrong block)");
 					if (recvUTPpkt.sn < snOffset)
 						duplicateCounter++;
 					else
@@ -212,7 +211,7 @@ public class Server {
 				// If we're here, the received data belongs to the current block. If it was already received, record it and continue.
 				if (receivedPkts[pktIndexInCurrBlock]) {
 					duplicateCounter++;
-					Utils.logg("Received SN=" + recvUTPpkt.sn + " duplicate");
+					//Utils.logg("Received SN=" + recvUTPpkt.sn + " duplicate");
 					break;
 				}
 				
@@ -284,8 +283,8 @@ public class Server {
 				eobAckPkt.dstPort = (short) clientPort;
 				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
 				eobAckPkt.setEndOfBlockAck(bn, missingSN);
-				Utils.logg("Sending EOB ACK for BN=" + bn);
 				int numOfEobAckTx = missingSN.length / 50 + 2;
+				Utils.logg("Sending EOB ACK for BN=" + bn + " " + numOfEobAckTx + " times");
 				for (int i=0; i < numOfEobAckTx; i++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 

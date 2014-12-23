@@ -10,17 +10,18 @@ import java.nio.channels.FileChannel;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 2000;
+	private static final short ACK_TIMEOUT = 2500;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int PKT_SIZE = 640;
 	static final int BLOCK_SIZE = 900;
 
-	private static int channelPort = DEF_CHANNEL_PORT;
-	private static int dstPort = Server.DEF_SERVER_PORT;
+	private static final int channelPort = DEF_CHANNEL_PORT;
+	private static final int dstPort = Server.DEF_SERVER_PORT;
 	
-	//private static int delayBeforeEob = 100;
-	
+	private static int sentDataPkt = 0;
+	private static int numDataPkt = 0;
+
 	// FIXME If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
 	
@@ -100,6 +101,14 @@ public class Client
 			// Bytes of actual data in the current block. Update total byte counter
 			int bytesInCurrBlock = chunkContainer.remaining();
 			totBytesSent += bytesInCurrBlock;
+			
+			// Compute number of packets in the current block
+			int numPacketsInThisBlock = bytesInCurrBlock / PKT_SIZE;
+			if (bytesInCurrBlock != numPacketsInThisBlock * PKT_SIZE)
+				numPacketsInThisBlock++;
+			
+			// Update total packet counter
+			numDataPkt += numPacketsInThisBlock;
 
 			// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 			byte[] txBuffer = new byte[PKT_SIZE * BLOCK_SIZE];	
@@ -110,10 +119,7 @@ public class Client
 			// Flip again the buffer, to prepare it for the write operation (inChannel.read)
 			chunkContainer.flip();
 
-			// Compute number of packets in the current block
-			int numPacketsInThisBlock = bytesInCurrBlock / PKT_SIZE;
-			if (bytesInCurrBlock != numPacketsInThisBlock * PKT_SIZE)
-				numPacketsInThisBlock++;
+
 
 			// Flag all packets as "to be sent"
 			// Note that except for the last block, numPacketsInThisBlock == BLOCK_SIZE
@@ -189,6 +195,7 @@ public class Client
 		double transferRate = totBytesSent / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
 		System.out.println(totBytesSent + " bytes sent");
+		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkt + " packets were actually sent");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
 	}
@@ -260,6 +267,7 @@ public class Client
 
 			//Utils.logg("Sending SN=" + sendUTPpkt.sn);
 			socket.send(sndPkt);
+			sentDataPkt++;
 		}
 	}
 
