@@ -28,10 +28,12 @@ public class UTPpacket {
 	static final int PAYL_START    = 10;
 	static final int HEADER_LENGTH = 10;
 	static final int SN_LENGTH = SN_END - SN_START + 1;
+	static final int LAST_SN = 0;
 	
 	InetAddress dstAddr; // destination address
 	short dstPort = INVALID_PORT;
 	int sn = INVALID_SN;
+	int lastSnInWindow = LAST_SN;
 	byte function = FUNCT_INVALID;
 	byte[] payl = null;
 

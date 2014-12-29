@@ -17,4 +17,8 @@ public class Utils {
 		}
 		return out;
 	}
+	public static String AckToBinaryString(int number, int window_size)	{
+		String b = Integer.toBinaryString((number & 0xffffffff) + 0x80000000).substring(32 - window_size);
+		return b;
+	}
 }
