@@ -107,6 +107,7 @@ public class Client
 		boolean[] toBeSent = new boolean[PKTS_IN_BUFFER];
 		
 		pendingEobAck = new boolean[BLOCKS_IN_BUFFER];
+		boolean[] isBlockAcked = new boolean[BLOCKS_IN_BUFFER];
 		
 
 		// This is used to read from file enough data to fill a block
@@ -117,10 +118,6 @@ public class Client
 		while(!theEnd) {
 			if (inChannel.read(chunkContainer) <= 0)
 				break;
-			
-			// We just read from file enough data to fill a block. Now we're gonna split it into packets,
-			// send them, send EOB message, wait for EOB ACK and retransmit until all packets of the
-			// current block are correctly received.
 
 			// Now that the buffer is full, flip it in order to perform read operations on it
 			chunkContainer.flip();
@@ -131,7 +128,7 @@ public class Client
 			totBytesSent += bufferedBytes; //not the right place...
 			
 			// Compute number of packets in the current block
-			int numPacketsInThisBlock = bufferedBytes / PKT_SIZE + 1; // not a proper name
+			int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
 
 			// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 			byte[] txBuffer = new byte[BUFFER_SIZE];	
@@ -142,7 +139,7 @@ public class Client
 			// Flip again the buffer, to prepare it for the write operation (inChannel.read)
 			chunkContainer.flip();
 
-			Arrays.fill(toBeSent, 0, numPacketsInThisBlock, true); //FIXME
+			Arrays.fill(toBeSent, 0, bufferedPkts, true); //FIXME
 			
 
 			// 
@@ -212,13 +209,15 @@ public class Client
 				// It's an EOB_ACK
 				Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 				timerStart = System.currentTimeMillis();
+				int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 				int ackedBn = recvEobAck.endOfBlockAck.bn;
 				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
-				int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 				int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 				int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
 				int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
 				pendingEobAck[bnIndexInBuffer] = false;
+				if (numMissingPkts == 0)
+					isBlockAcked[bnIndexInBuffer] = true;
 				for (int j = 0; j < numMissingPkts; j++) {
 					int pktInd = missingPkts[j] - snOffset + blockOffset;
 					toBeSent[pktInd] = true;
@@ -228,7 +227,13 @@ public class Client
 //					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
 				sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
 
-
+				for (int i=0; i<eob.length; i++)
+					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
+				
+				if(isBlockAcked[0]) { // block at index zero is fine: shift
+					Utils.logg("shift");
+					
+				}
 
 				/*if(! pendingEobAck[0]) { // block at index zero is fine: shift
 					for (int i = 0; i < pendingEobAck.length - 1; i++)
@@ -344,6 +349,10 @@ public class Client
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;
 		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;
+		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
+			numBlocks = BLOCKS_IN_BUFFER;
+			bytesInLastBlock = BYTES_IN_BLOCK;
+		}
 		int lastBlockIndex = numBlocks - 1;
 //		Utils.logg("num blocks = " + numBlocks);
 //		Utils.logg(bytesInLastBlock);
@@ -353,15 +362,12 @@ public class Client
 			if (i == lastBlockIndex)
 				bytesInThisBlock = bytesInLastBlock;
 			
-			int numPktsInThisBlock = bytesInThisBlock / PKT_SIZE + 1;
-			if (numPktsInThisBlock > PKTS_IN_BLOCK) {
-				//TODO
-			}
+			int numPktsInThisBlock = Math.min(PKTS_IN_BLOCK, bytesInThisBlock / PKT_SIZE + 1);
 //			Utils.logg("pkts in block " + (i+1) + " = " + numPktsInThisBlock);
 			byte[] txBuf_thisBlock = new byte[bytesInThisBlock];
 			System.arraycopy(txBuffer, BYTES_IN_BLOCK * i, txBuf_thisBlock, 0, bytesInThisBlock);
 			
-			boolean[] toBeSent_thisBlock = new boolean[bytesInThisBlock];
+			boolean[] toBeSent_thisBlock = new boolean[numPktsInThisBlock];
 			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock);
 			
 			sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);

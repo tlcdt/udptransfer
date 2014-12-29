@@ -27,7 +27,7 @@ public class Server {
 	
 	static final int PKT_SIZE = Client.PKT_SIZE;
 	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
-	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER;
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER * 10; //TODO temp
 	static final int BLOCKSIZE = PKTS_IN_BLOCK * PKT_SIZE;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int BUFFERSIZE = BLOCKSIZE * BLOCKS_IN_BUFFER;
