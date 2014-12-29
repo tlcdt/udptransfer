@@ -92,6 +92,10 @@ public class Server {
 		int totNumPackets = 0;
 		int totNumBytes = 0;
 		
+		
+		int bufferSize = 20000; //pkts
+		int numBlocksInBuffer = 10;
+		
 		// Counters for duplicate data packets and packets belonging to future BNs
 		// (for performance analysis purpose)
 		int duplicateCounter = 0;
@@ -101,10 +105,6 @@ public class Server {
 		// has been received by this server.
 		boolean[] receivedPkts = new boolean[INIT_BLOCKSIZE]; // all false
 
-		// Current Block Number. The transmission focuses on a block with a certain BN before getting
-		// to the next one (block-based stop and wait ARQ), so this is a sort of incremental counter.
-		int bn = 1;
-		
 		// This flag indicates whether our knowledge of the size of the block is complete. This is
 		// achieved at the first reception of EOB (block number = 1). Before that, the block size at
 		// the server is temporary, and adapts during the reception of data in the first block.
@@ -158,16 +158,16 @@ public class Server {
 				// same length( except for the last one)
 				if (pktSize == INVALID_PKTSIZE) {
 					pktSize = recvUTPpkt.payl.length; // is this robust?
-					writeBuffer = new byte[pktSize * blockSize];
+					writeBuffer = new byte[pktSize * bufferSize];
 				}
 				
 				// If this is still the first block but we're receiving data packets that exceed this block, then
 				// the block is actually larger than we thought: update blockSize and resize arrays as needed.
-				if (bn==1 && recvUTPpkt.sn > blockSize) {
+				if (!blockSizeIsFinal && recvUTPpkt.sn > bufferSize) {
 					// At least double it to avoid too many resize operations, but this may not be enough so we use SN as well.
-					blockSize = Math.max(recvUTPpkt.sn, 2 * blockSize);
-					receivedPkts = Utils.resizeArray(receivedPkts, blockSize);
-					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * blockSize);
+					bufferSize = Math.max(recvUTPpkt.sn, 2 * bufferSize);
+					receivedPkts = Utils.resizeArray(receivedPkts, bufferSize);
+					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * bufferSize);
 				}
 				
 				// Note: if a packet from a block BN>currBN arrives, blockSize increases and this packet
@@ -188,22 +188,10 @@ public class Server {
 				}
 
 				// Offset for SN: the first packet of block bn has SN=snOffset
-				int snOffset = 1 + blockSize * (bn - 1);
-
-				// If the current packet belongs to a different block, discard it.
-				// TODO Handle timeout
-				if (recvUTPpkt.sn < snOffset || recvUTPpkt.sn >= snOffset + blockSize) {
-					//Utils.logg("Received SN=" + recvUTPpkt.sn + " -> discard (wrong block)");
-					if (recvUTPpkt.sn < snOffset)
-						duplicateCounter++;
-					else
-						// This should never happen
-						futureBlockArrivals++;
-					break;
-				}				
+				//int snOffset = 1 + blockSize * (bn - 1);
 
 				// Index [0, blockSize] of this packet in the current block
-				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % blockSize;
+				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % bufferSize;
 				
 				// Index of the first byte of the packet in the write buffer: we're gonna write it there.
 				int pktByteOffsInCurrBlock = pktIndexInCurrBlock * pktSize;
@@ -231,31 +219,10 @@ public class Server {
 
 			case UTPpacket.FUNCT_EOB:
 
-				if (recvUTPpkt.endOfBlock.bn < bn) {
-					// This is an EOB for a BN that was already ACKed (EOB_ACK was probably lost)
-					// so we retx the EOB_ACK for that BN.
-					
-					Utils.logg("EOB from old BN (BN=" + recvUTPpkt.endOfBlock.bn + " while currBN=" + bn + ") -> retransmit EOB_ACK");
-					// Assemble and send EOB_ACK
-					UTPpacket eobAckPkt = new UTPpacket();
-					eobAckPkt.sn = UTPpacket.INVALID_SN;
-					eobAckPkt.dstAddr = clientAddr;
-					eobAckPkt.dstPort = (short) clientPort;
-					eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
-					eobAckPkt.setEndOfBlockAck(recvUTPpkt.endOfBlock.bn, new int[0]);
-					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
-					
-					break;
-
-				}
-				else if (recvUTPpkt.endOfBlock.bn > bn) {
-					Utils.logg("! Block number of EOB is greater than current BN");
-					break;
-				}
-
 				// Update blockSize with the final actual value (which may be smaller than current size)
-				if (bn == 1 && !blockSizeIsFinal) {
+				if (!blockSizeIsFinal) {
 					blockSize = recvUTPpkt.endOfBlock.numberOfSentSN;
+					bufferSize = blockSize * numBlocksInBuffer;
 					blockSizeIsFinal = true;
 					receivedPkts = Utils.resizeArray(receivedPkts, blockSize);
 					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * blockSize);
@@ -270,7 +237,7 @@ public class Server {
 				int missingSNindex = 0;
 				for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
 					if (! receivedPkts[i])
-						missingSN[missingSNindex++] = i + 1 + (bn - 1) * blockSize;
+						missingSN[missingSNindex++] = i + 1 + (recvUTPpkt.endOfBlock.bn - 1) * blockSize;
 				}
 				missingSN = Arrays.copyOf(missingSN, missingSNindex); // Truncate
 
@@ -282,15 +249,15 @@ public class Server {
 				eobAckPkt.dstAddr = clientAddr;
 				eobAckPkt.dstPort = (short) clientPort;
 				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
-				eobAckPkt.setEndOfBlockAck(bn, missingSN);
+				eobAckPkt.setEndOfBlockAck(recvUTPpkt.endOfBlock.bn, missingSN);
 				int numOfEobAckTx = missingSN.length / 50 + 2;
-				Utils.logg("Sending EOB ACK for BN=" + bn + " " + numOfEobAckTx + " times");
+				Utils.logg("Sending EOB ACK for BN=" + recvUTPpkt.endOfBlock.bn + " " + numOfEobAckTx + " times");
 				for (int i=0; i < numOfEobAckTx; i++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
 				if (missingSN.length == 0) {
 					// *This block has been received!*
-					Utils.logg("Received correctly BN=" + bn);
+					Utils.logg("Received correctly BN=" + recvUTPpkt.endOfBlock.bn);
 					if (!lastBlock)
 						bytesInCurrBlock = pktSize * blockSize;
 					try {
@@ -308,7 +275,6 @@ public class Server {
 
 					// Reset flags for received packets of current block, and increment BN
 					Arrays.fill(receivedPkts, false);
-					bn++;
 				}
 
 

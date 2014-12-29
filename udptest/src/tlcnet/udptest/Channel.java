@@ -166,7 +166,7 @@ public class Channel {
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
 		double delay = -Math.log(new Random().nextDouble()) * mean;
-		//delay = Math.round(Math.random() * 1600 + 20);
+		delay = Math.round(Math.random() * 2000 + 3000);
 		return Math.round(delay);
 	}
 	
