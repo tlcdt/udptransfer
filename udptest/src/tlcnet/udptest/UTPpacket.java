@@ -25,9 +25,12 @@ public class UTPpacket {
 	static final int FUNCT_END     = 6;
 	static final int SN_START      = 7; // 3
 	static final int SN_END        = 9;
-	static final int PAYL_START    = 10;
-	static final int HEADER_LENGTH = 10;
+	static final int LAST_SN_START = 10;// 3
+	static final int LAST_SN_END = 12;	// 3		
+	static final int PAYL_START    = 13;
+	static final int HEADER_LENGTH = 13;
 	static final int SN_LENGTH = SN_END - SN_START + 1;
+	static final int LAST_SN_LENGTH = LAST_SN_END - LAST_SN_START + 1;
 	static final int LAST_SN = 0;
 	
 	InetAddress dstAddr; // destination address
@@ -55,6 +58,7 @@ public class UTPpacket {
 		dstPort = bytes2short(Arrays.copyOfRange(rawData, DSTPORT_START, DSTPORT_END+1));
 
 		sn = bytes2int(Arrays.copyOfRange(rawData, SN_START, SN_END+1));
+		lastSnInWindow = bytes2int(Arrays.copyOfRange(rawData, LAST_SN_START, LAST_SN_END+1));
 		function = rawData[FUNCT_START];
 		payl = Arrays.copyOfRange(rawData, PAYL_START, rawData.length);
 	}
@@ -69,6 +73,7 @@ public class UTPpacket {
 		System.arraycopy(int2bytes(dstPort, 2), 0, rawData, DSTPORT_START, 2);
 		rawData[FUNCT_START] = function;
 		System.arraycopy(int2bytes(sn, 4), 4 - SN_LENGTH, rawData, SN_START, SN_LENGTH);
+		System.arraycopy(int2bytes(lastSnInWindow, 4), 4 - LAST_SN_LENGTH, rawData, LAST_SN_START, LAST_SN_LENGTH);
 		System.arraycopy(payl, 0, rawData, PAYL_START, payl.length);
 		
 		return rawData;
