@@ -23,8 +23,7 @@ public class Client
 		int dstPort = Server.DEF_SERVER_PORT;
 		InetAddress channelAddr;
 		InetAddress dstAddr;
-		long startTransferTime = 0;
-		boolean firstPacket = true;
+		long startTransferTime = 0;		//This is the timer variable
 		DatagramSocket socket = null;
 
 		if (args.length != 3) {
@@ -63,7 +62,7 @@ public class Client
 			return;
 		}
 		FileChannel inChannel = theFile.getChannel();
-		ByteBuffer chunkContainer = ByteBuffer.allocate(WINDOW_SIZE*BLOCK_SIZE);
+		ByteBuffer chunkContainer = ByteBuffer.allocate(WINDOW_SIZE*BLOCK_SIZE);		//chunkContainer has the size of a window of pcks
 
 
 		
@@ -72,65 +71,68 @@ public class Client
 		// * * * * * * * * * * * * * *//
 
 		
+		// ---- Initialization and useful variables ----
+		int sn = 1; 
+		int begin = 0;	//begin always refears to array "first"; end is the index of the last byte of the window
+		int end = (WINDOW_SIZE - 1)*BLOCK_SIZE; //begin and end keep track of the frames we are sending
 		
-		int sn = 1; int begin = 0; int end = (WINDOW_SIZE - 1)*BLOCK_SIZE; //begin and end keep track of the frames we are sending
-		
-		String ack = "";
-		boolean first_pck = true;		//start of transmission
-		byte first[] = new byte[WINDOW_SIZE*BLOCK_SIZE]; //TODO: FIX TIMER
-		byte sec[] = new byte[WINDOW_SIZE*BLOCK_SIZE]; 	//Two arrays of bytes that help sending data
-		boolean mustSend = true;						//To stop the loop
+		String ack = "";								//this string will contain the ack in binary. 0 = not acked; 1 = "acked"
+		boolean first_pck = true;						//start of transmission
+		byte first[] = new byte[WINDOW_SIZE*BLOCK_SIZE];//Two arrays of bytes that help sending data. They are to be considered consecutive
+		byte sec[] = new byte[WINDOW_SIZE*BLOCK_SIZE]; 	
+		boolean mustSend = true;						//Used to stop the loop
 		int segmentCounter = 1;							//To know how many "windows" we sent
 		int pcksInFirst = WINDOW_SIZE;					//How many pcks of the window are in the first byte array
-		boolean slide = false;
-		int lastSn = 0;
+		boolean slide = false;							//Used when we have to shift the window
+		int lastSn = 0;									//It becomes != 0 when we reach the final packet
 		int lastSnInWindow = 0;
 		
 		while(mustSend)	{
-			int offset = 0; //offset in the bytebuffer
+			int offset = 0; 							//it's the entity of the window-slide measured in packets
 			if(first_pck)	{
-				first_pck = false;		//The beginning comes just once :P
-				fill(first, chunkContainer, inChannel);	//Check it out below
+				first_pck = false;						//The beginning comes just once :P
+				fill(first, chunkContainer, inChannel);	//Initialization: check it out below
 				fill(sec, chunkContainer, inChannel);
-				if(sec.length == 0 && first.length != 0 && first.length < WINDOW_SIZE*BLOCK_SIZE)	{
+				if(sec.length == 0 && first.length != 0 && first.length < WINDOW_SIZE*BLOCK_SIZE)	{	//This is for small files
 					if(first.length%BLOCK_SIZE != 0)
 						end = (first.length/BLOCK_SIZE)*BLOCK_SIZE;
 					else
-						end = first.length - BLOCK_SIZE;		//This is to deal with very small pcks
+						end = first.length - BLOCK_SIZE;			//This is to deal with very small pcks
 					lastSn = end + 1;
 				}
-				else if(sec.length == 0 && first.length == 0)	{
-					System.out.println("Empty packet. Shutting down.");	//TODO: fix 0pck transmission
+				else if(sec.length == 0 && first.length == 0)	{	//TODO: Should we fix empty pck transmission?
+					System.out.println("Empty packet. Shutting down.");	
 					socket.close();
 					theFile.close();
 					return;
 				}
-				//Sending first pck-window
-				lastSnInWindow = WINDOW_SIZE;
+				// ---- Sending the first window ----
+				startTransferTime = System.currentTimeMillis();		//Here we start the timer
+				lastSnInWindow = WINDOW_SIZE;						//UTPpacket new field
 				for(int i = begin; i <= end; i += BLOCK_SIZE)	{
 					int pck_size = BLOCK_SIZE;
-					if(i == end && first.length%BLOCK_SIZE != 0)
+					if(i == end && first.length%BLOCK_SIZE != 0)	//last pck could be smaller than BLOCK_SIZE
 						pck_size = first.length%BLOCK_SIZE;
 					byte[] temp = new byte[pck_size]; 
-					System.arraycopy(first, i, temp, 0, pck_size);
+					System.arraycopy(first, i, temp, 0, pck_size);	//Check out method "send" below
 					send(lastSnInWindow, lastSn, sn, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
-					sn++;
+					sn++;											
 				}
 			}
 			
-			
+			// the next thing will be done only if !first_pck
 			else	{
-				//Scorro la stringa ack e trovo offset. poi rimando i pacchetti non ricevuti
+				// ---- Check the ack-String for nacks. Then resend nacked pcks. If possible, slide the window and send new pcks. ---
 				boolean firstDroppedPck = false;
 				for(int i = 0; i < ack.length(); i++)	{
-					if(ack.substring(i,i+1).equals("0"))	{
+					if(ack.substring(i,i+1).equals("0"))	{		//Note that if character is "1", we ignore it
 						if(!firstDroppedPck && lastSn == 0)	{
 							firstDroppedPck = true;
-							offset = i;
+							offset = i;					
 						}
 						lastSnInWindow = sn - 1 + offset;
-						//Re-send the dropped pcks
-						if(i < pcksInFirst)	{		//Reading from first byte array
+						// ---- Re-send the dropped pcks ----
+						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
 							int pck_size = BLOCK_SIZE;
 							if((i*BLOCK_SIZE == end) && first.length%BLOCK_SIZE != 0)	{
 								pck_size = first.length%BLOCK_SIZE;
@@ -139,42 +141,49 @@ public class Client
 							System.arraycopy(first, begin + i*BLOCK_SIZE, temp, 0, pck_size);
 							send(lastSnInWindow, lastSn, sn - WINDOW_SIZE + i, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
 						}
-						else	{
+						else	{									//...or in second byte array?
 							int index = i - pcksInFirst;
 							int pck_size = BLOCK_SIZE;
 							if((index*BLOCK_SIZE == end) && sec.length%BLOCK_SIZE != 0)	{
 								pck_size = sec.length%BLOCK_SIZE;
 							}
 							byte[] temp = new byte[pck_size]; 
-							System.arraycopy(sec, index*BLOCK_SIZE, temp, 0, pck_size);//ERROR: TODO: check lastSNInW
+							System.arraycopy(sec, index*BLOCK_SIZE, temp, 0, pck_size);
 							send(lastSnInWindow, lastSn, sn - WINDOW_SIZE + i, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
 						}
 					}
 				}
-				//Slide the window
+				
+				// ---- Slide the window if possible ----
+				
 				if(offset!=0 && lastSn == 0)	{
+					//Case 1: we can slide without problems (here we don't accept sliding to the end of sec array)
 					if((WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE < sec.length)	{
 						begin += offset*BLOCK_SIZE;
 						end = (WINDOW_SIZE - pcksInFirst + offset - 1)*BLOCK_SIZE;
 						pcksInFirst = (first.length - begin)/BLOCK_SIZE;
 						slide = true;
 					}
+					//Case 2: Not possible to slide so much. Sec array is shorter than the normal size: we are transmitting last window. 
+					//So we slide as much as we can!
 					else if(sec.length!=0 && sec.length < BLOCK_SIZE*WINDOW_SIZE)	{
-						if((sec.length - end)%BLOCK_SIZE != 0)
+						if((sec.length - end)%BLOCK_SIZE != 0)		//Last packet could be smaller than BLOCK_SIZE
 							offset = (sec.length - end)/BLOCK_SIZE;
 						else
 							offset = (sec.length - end)/BLOCK_SIZE - 1;
 						begin += offset*BLOCK_SIZE;
 						end = (WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE;
-						pcksInFirst = first.length - begin;
-						//This is the last window
+						pcksInFirst = first.length - begin;			
+						// --- This is the last window ----
 						lastSn = sn - 1 + offset;
-						if(offset != 0)		//Offset may have changed
+						if(offset != 0)		//Real offset may have changed
 							slide = true;
 					}
+					//Oh, we must read new bytes from chunkContainer!
 					else if(sec.length == BLOCK_SIZE*WINDOW_SIZE)	{
 						first = sec;
 						fill(sec, chunkContainer, inChannel);
+						//Case 3: Ok, now we can slide without any problems
 						if( (offset*BLOCK_SIZE) - (first.length - end - BLOCK_SIZE) <= sec.length)	{
 							begin = (offset - pcksInFirst)*BLOCK_SIZE;
 							if(begin == 0)
@@ -184,6 +193,8 @@ public class Client
 							pcksInFirst = first.length - begin;
 							slide = true;
 						}
+						//Case 4: Oh, man...sec array is shorter than usual and we cannot slide so much. This is the last window!
+						//We slide as much as we can
 						else if(sec.length != 0 && sec.length < BLOCK_SIZE*WINDOW_SIZE)	{
 							if(sec.length%BLOCK_SIZE != 0)	{
 								end = sec.length/BLOCK_SIZE;
@@ -199,10 +210,12 @@ public class Client
 							pcksInFirst = first.length - begin;
 							slide = true;
 						}
-						else	{	//sec.length == 0
+						//Case 5: sec.length is equal to 0!
+						else	{
 							end = (WINDOW_SIZE - 1)*BLOCK_SIZE;
 							begin = 0;
 							offset = pcksInFirst*BLOCK_SIZE + begin;
+							pcksInFirst = WINDOW_SIZE;
 							lastSn = sn - 1 + offset;
 							if(offset != 0)
 								slide = true;
@@ -210,12 +223,14 @@ public class Client
 					}
 				}
 			}
-			//Send new pcks
-			if(slide)	{
-				for(int i = WINDOW_SIZE - offset; i < WINDOW_SIZE; i++)	{		//TODO: check
+			
+			// ---- Send new pcks, if possible ----
+			
+			if(slide)	{			//of course here we just send packets that have never been sent before!
+				for(int i = WINDOW_SIZE - offset; i < WINDOW_SIZE; i++)	{
 					if(pcksInFirst - i > 0)	{
 						int pck_size = BLOCK_SIZE;
-						if((i == WINDOW_SIZE - 1) && first.length%BLOCK_SIZE != 0)	{	//TODO:useless?
+						if((i == WINDOW_SIZE - 1) && first.length%BLOCK_SIZE != 0)	{	//TODO: is this if really necessary, here?
 							pck_size = first.length%BLOCK_SIZE;
 						}
 						byte[] temp = new byte[pck_size]; 
@@ -235,10 +250,11 @@ public class Client
 						sn++;
 					}
 				}
-				slide = false;
+				slide = false;		//Ok, we slided, next time we'll see if it's still possible
 			}
 			
-			//Receive ack
+			// ---- Receive ack ----
+			
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 			socket.setSoTimeout(ACK_TIMEOUT);
@@ -247,27 +263,36 @@ public class Client
 			}
 			catch (SocketTimeoutException e) {
 				System.out.println("timeout for ack n. " + segmentCounter + " expired: resending");
-				ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//Ack is a string of zeros
-				continue; 
+				ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//Ack is a string of zeros: nothing was actually acked
+				continue; 										//Restarts from the main cycle
 			}
 			catch(IOException e) {
-				System.err.println("I/O error while receiving datagram:\n" + e);
+				System.err.println("I/O error while receiving ack packet:\n" + e);
 				socket.close(); System.exit(-1);
 			}
 			
-			//Process received ack
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
-			UTPpacket recvUTPpkt = new UTPpacket(recvData);		// Parse UDP payload
+			// ---- Process received ack: put it in binary string form ----
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
+			UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
 			if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)	{
-				ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);
-				System.out.println("ACK n. " + segmentCounter + ": " + ack);
-			if(lastSn != 0 && lastSnInWindow != lastSn)	{
-				int digits = (lastSnInWindow - lastSn);
-				String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
-				ack = ones + ack.substring(0, WINDOW_SIZE - digits);
-			}
-			if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)		//It means that everything was acked
-				mustSend = false;
+				ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class 
+				//Debug
+				System.out.println("ACK n. " + segmentCounter + ": " + ack);			
+				
+				//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
+				//(no more data). I realized that, since we send old nacked packets BEFORE sliding the window, when we send them 
+				//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
+				//ack, fixing it.
+				
+				if(lastSn != 0 && lastSnInWindow != lastSn)	{
+					int digits = (lastSnInWindow - lastSn);
+					String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
+					ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+				}
+				if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)	{		//It means that everything was acked
+					mustSend = false;
+					System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
+				}
 			}
 		}
 	}
@@ -275,30 +300,30 @@ public class Client
 	
 	//SOME AUXILIARY METHODS
 	
-	static void fill(byte[] one, ByteBuffer container, FileChannel channel)	throws IOException {
+	static void fill(byte[] array, ByteBuffer container, FileChannel channel)	throws IOException {	//fills an array with data
 		long howManyBytes = channel.read(container);
 		if(howManyBytes == BLOCK_SIZE*WINDOW_SIZE)	{
 			container.flip();	//Important! Otherwise .remaining() method gives 0
-			container.get(one, 0, one.length);
+			container.get(array, 0, array.length);
 			container.clear();
 		}
 		else if(howManyBytes > 0)	{
-			container.flip();	//Important! Otherwise .remaining() method gives 0
-			one = new byte[container.remaining()];
-			container.get(one, 0, one.length);
+			container.flip();	
+			array = new byte[container.remaining()];		//resize the array
+			container.get(array, 0, array.length);
 			container.clear();
 		}
-		else one = new byte[0];
+		else array = new byte[0];							//empty array
 	}
 	
 	static void send(int lastSnInWindow, int lastSn, int sn, byte[] temp, InetAddress dstAddr, int dstPort, InetAddress channelAddr, int channelPort, DatagramSocket socket, RandomAccessFile theFile) 
-	throws IOException {
+	throws IOException {		//Just the usual boring stuff
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.sn = sn;
 		sendUTPpkt.dstAddr = dstAddr;
 		sendUTPpkt.dstPort = (short)dstPort;
 		sendUTPpkt.lastSnInWindow = lastSnInWindow;	//This is just a reference for receiver
-		if(sn == lastSn)
+		if(sn == lastSn)		//NOTE: last packet carries data, but it has FIN as function field
 			sendUTPpkt.function = (byte) UTPpacket.FUNCT_FIN;
 		else
 			sendUTPpkt.function = (byte) UTPpacket.FUNCT_DATA;

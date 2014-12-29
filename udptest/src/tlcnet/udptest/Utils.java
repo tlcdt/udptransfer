@@ -17,6 +17,7 @@ public class Utils {
 		}
 		return out;
 	}
+	//This returns a string representing number in binary, with window_size bits
 	public static String AckToBinaryString(int number, int window_size)	{
 		String b = Integer.toBinaryString((number & 0xffffffff) + 0x80000000).substring(32 - window_size);
 		return b;
