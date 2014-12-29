@@ -72,7 +72,7 @@ public class Channel {
 			// ---- Send packet ----
 			
 			if (mustDrop(utpPkt.payl.length)) {
-//				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 //				droppedPkts++;
 				continue;
 			}
@@ -165,8 +165,8 @@ public class Channel {
 	 */
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
+		mean += 600;
 		double delay = -Math.log(new Random().nextDouble()) * mean;
-		delay = Math.round(Math.random() * 2000 + 3000);
 		return Math.round(delay);
 	}
 	

@@ -17,9 +17,8 @@ public class Utils {
 	
 	public static String byteArr2str(byte[] in) {
 		String out = "";
-		for (int i = 0; i < in.length; i++) {
+		for (int i = 0; i < in.length; i++)
 			out += " " + (in[i] & 0xff); // range 0 to 255
-		}
 		return out;
 	}
 	

@@ -11,8 +11,7 @@ public class UTPpacket {
 	
 	static final int FUNCT_INVALID = -1;
 	static final int FUNCT_DATA = 2;
-	static final int FUNCT_FILEINFO  = 3;
-	static final int FUNCT_FILEINFO_ACK = 4;
+	static final int FUNCT_FIN  = 3;
 	static final int FUNCT_EOB = 5;	// endofblock
 	static final int FUNCT_EOB_ACK = 6;
 	
@@ -32,7 +31,7 @@ public class UTPpacket {
 	short dstPort = INVALID_PORT;
 	int sn = INVALID_SN;
 	byte function = FUNCT_INVALID;
-	byte[] payl = null;
+	byte[] payl = new byte[0]; // it makes sense
 	EndOfBlock endOfBlock = null;
 	EndOfBlockAck endOfBlockAck = null;
 

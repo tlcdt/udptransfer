@@ -20,12 +20,18 @@ public class Server {
 	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks
 	private static final int RX_PKT_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
-	// Initial blockSize. It is updated while receiving the first block.
-	// The array of flags for received packets, and the write buffer, have a size that
-	// depends on blockSize
+
 	private static final int INIT_BLOCKSIZE = 60; // TODO: this must be updated when receiving
 
 	private static final int INVALID_PKTSIZE = -1;
+	
+	static final int PKT_SIZE = Client.PKT_SIZE;
+	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER;
+	static final int BLOCKSIZE = PKTS_IN_BLOCK * PKT_SIZE;
+	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
+	static final int BUFFERSIZE = BLOCKSIZE * BLOCKS_IN_BUFFER;
+	
 
 
 
@@ -33,10 +39,12 @@ public class Server {
 
 	public static void main(String[] args) throws IOException {
 
+		final int NUMBER_OF_FIN = 10;
 		int listenPort = DEF_SERVER_PORT;
 		int channelPort = DEF_CHANNEL_PORT;
 		int clientPort = Client.DEF_CLIENT_PORT;
 		InetAddress clientAddr = null;
+		InetAddress channelAddr = null;
 		String filename = null;
 		FileOutputStream fileOutputStream = null;
 
@@ -85,16 +93,13 @@ public class Server {
 		// * * * * * * * * * * * * * *//
 
 
-		// The write buffer holds 
-		byte[] writeBuffer = null;
+		// 
+		byte[] writeBuffer = new byte[BUFFERSIZE];
 	
 		// File statistics
 		int totNumPackets = 0;
 		int totNumBytes = 0;
-		
-		
-		int bufferSize = 20000; //pkts
-		int numBlocksInBuffer = 10;
+
 		
 		// Counters for duplicate data packets and packets belonging to future BNs
 		// (for performance analysis purpose)
@@ -103,20 +108,14 @@ public class Server {
 
 		// Array of flags. If receivedPkts[i] is true, the packet of index i in this block
 		// has been received by this server.
-		boolean[] receivedPkts = new boolean[INIT_BLOCKSIZE]; // all false
+		boolean[] receivedPkts = new boolean[PKTS_IN_BUFFER]; // all false
 
-		// This flag indicates whether our knowledge of the size of the block is complete. This is
-		// achieved at the first reception of EOB (block number = 1). Before that, the block size at
-		// the server is temporary, and adapts during the reception of data in the first block.
-		boolean blockSizeIsFinal = false;
-
-		int pktSize = INVALID_PKTSIZE;
-		int blockSize = INIT_BLOCKSIZE;	// TODO update this along the way
 		int bytesInCurrBlock = -1;
 
 
 		boolean theEnd = false; //Needed to stop the cycle
 		boolean lastBlock = false;
+		int lastSN = 0;
 		while(!theEnd)
 		{
 
@@ -134,6 +133,9 @@ public class Server {
 				socket.close(); System.exit(-1);
 			}
 
+			
+			
+//			Arrays.fill(receivedPkts, false);
 
 
 
@@ -142,7 +144,7 @@ public class Server {
 			// payload of received UDP packet
 			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());
 			UTPpacket recvUTPpkt = new UTPpacket(recvData);			// parse payload
-			InetAddress channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
+			channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
 
 
 			//DEBUG
@@ -154,49 +156,32 @@ public class Server {
 			switch (recvUTPpkt.function) {
 			case UTPpacket.FUNCT_DATA:
 
-				// Store pktSize if this is the first packet, assuming all packets have the
-				// same length( except for the last one)
-				if (pktSize == INVALID_PKTSIZE) {
-					pktSize = recvUTPpkt.payl.length; // is this robust?
-					writeBuffer = new byte[pktSize * bufferSize];
-				}
-				
-				// If this is still the first block but we're receiving data packets that exceed this block, then
-				// the block is actually larger than we thought: update blockSize and resize arrays as needed.
-				if (!blockSizeIsFinal && recvUTPpkt.sn > bufferSize) {
-					// At least double it to avoid too many resize operations, but this may not be enough so we use SN as well.
-					bufferSize = Math.max(recvUTPpkt.sn, 2 * bufferSize);
-					receivedPkts = Utils.resizeArray(receivedPkts, bufferSize);
-					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * bufferSize);
-				}
-				
 				// Note: if a packet from a block BN>currBN arrives, blockSize increases and this packet
 				// is thought to be of the current BN. Later, when the first block ends, we will know the
 				// actual size of the block and truncate the appropriate arrays to size blockSize.
 					
 				// If pktSize was defined, and this packet is smaller than usual, this must be
 				// the last packet of the last block: end of transmission!
-				else if (pktSize != recvUTPpkt.payl.length) { // this should never happen except in the end of transmission
-					lastBlock = true; // Maybe an additional check that this is the end?
-					int pktsInLastBlock = (recvUTPpkt.sn - 1) % blockSize + 1;
-					bytesInCurrBlock = (pktsInLastBlock - 1) * pktSize + recvUTPpkt.payl.length;
+				if (PKT_SIZE != recvUTPpkt.payl.length) { // this should never happen except in the end of transmission
+					lastBlock = true;
+					lastSN = recvUTPpkt.sn;
+					int pktsInLastBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BLOCK + 1;
+					bytesInCurrBlock = (pktsInLastBlock - 1) * PKT_SIZE + recvUTPpkt.payl.length;
 					
 					// Save total number of packets and bytes of the file
 					totNumPackets = recvUTPpkt.sn;
-					totNumBytes = (recvUTPpkt.sn - 1) * pktSize + recvUTPpkt.payl.length;
+					totNumBytes = (recvUTPpkt.sn - 1) * PKT_SIZE + recvUTPpkt.payl.length;
 					// TODO compute these counters along the way, not here at the end!
 				}
 
-				// Offset for SN: the first packet of block bn has SN=snOffset
-				//int snOffset = 1 + blockSize * (bn - 1);
-
 				// Index [0, blockSize] of this packet in the current block
-				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % bufferSize;
+				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BUFFER;
 				
 				// Index of the first byte of the packet in the write buffer: we're gonna write it there.
-				int pktByteOffsInCurrBlock = pktIndexInCurrBlock * pktSize;
+				int pktByteOffsInCurrBlock = pktIndexInCurrBlock * PKT_SIZE;
 				
 				// If we're here, the received data belongs to the current block. If it was already received, record it and continue.
+//				Utils.logg("arraylength= " + receivedPkts.length + "\tindex=" + pktIndexInCurrBlock);
 				if (receivedPkts[pktIndexInCurrBlock]) {
 					duplicateCounter++;
 					//Utils.logg("Received SN=" + recvUTPpkt.sn + " duplicate");
@@ -209,7 +194,8 @@ public class Server {
 				// Update receivedPkts array
 				receivedPkts[pktIndexInCurrBlock] = true;
 				
-				//Utils.logg("Received SN=" + recvUTPpkt.sn);
+				Utils.logg("Received SN=" + recvUTPpkt.sn);
+				//Utils.logg(" == Pkt " + recvUTPpkt.sn + ": " + new String(recvUTPpkt.payl).substring(0, 12));
 
 				break;
 
@@ -219,28 +205,18 @@ public class Server {
 
 			case UTPpacket.FUNCT_EOB:
 
-				// Update blockSize with the final actual value (which may be smaller than current size)
-				if (!blockSizeIsFinal) {
-					blockSize = recvUTPpkt.endOfBlock.numberOfSentSN;
-					bufferSize = blockSize * numBlocksInBuffer;
-					blockSizeIsFinal = true;
-					receivedPkts = Utils.resizeArray(receivedPkts, blockSize);
-					writeBuffer = Utils.resizeArray(writeBuffer, pktSize * blockSize);
-					Utils.logg("Final blockSize: " + blockSize + " packets");
-				}
-				
-				
-				
+
 				// -- Fill in the array with missing SNs
 				
-				int[] missingSN = new int[blockSize];
+				int[] missingSN = new int[PKTS_IN_BUFFER];
 				int missingSNindex = 0;
 				for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
-					if (! receivedPkts[i])
-						missingSN[missingSNindex++] = i + 1 + (recvUTPpkt.endOfBlock.bn - 1) * blockSize;
+					if (! receivedPkts[i + PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1)])
+						missingSN[missingSNindex++] = i + PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1) + 1;
 				}
 				missingSN = Arrays.copyOf(missingSN, missingSNindex); // Truncate
 
+				Utils.logg(missingSNindex + "pkt\t missing from BN=" + recvUTPpkt.endOfBlock.bn);
 				
 				// -- Assemble and send EOB_ACK
 				
@@ -250,33 +226,23 @@ public class Server {
 				eobAckPkt.dstPort = (short) clientPort;
 				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
 				eobAckPkt.setEndOfBlockAck(recvUTPpkt.endOfBlock.bn, missingSN);
-				int numOfEobAckTx = missingSN.length / 50 + 2;
-				Utils.logg("Sending EOB ACK for BN=" + recvUTPpkt.endOfBlock.bn + " " + numOfEobAckTx + " times");
-				for (int i=0; i < numOfEobAckTx; i++)
-					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
+				Utils.logg("Sending ACK for BN=" + recvUTPpkt.endOfBlock.bn);
+				sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
 				if (missingSN.length == 0) {
 					// *This block has been received!*
 					Utils.logg("Received correctly BN=" + recvUTPpkt.endOfBlock.bn);
 					if (!lastBlock)
-						bytesInCurrBlock = pktSize * blockSize;
-					try {
-						fileOutputStream.write(writeBuffer, 0, bytesInCurrBlock);
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-					
-					// If this is the last block, and there are no missing packets, then
-					// this is the ACTUAL end of transmission
-					if (lastBlock) {
-						theEnd = true;
-						break;
-					}
-
-					// Reset flags for received packets of current block, and increment BN
-					Arrays.fill(receivedPkts, false);
+						bytesInCurrBlock = BLOCKSIZE;
 				}
 
+				// This is the ACTUAL end of transmission
+				if (lastBlock) {
+					boolean[] receivedPktsLastChunk = Utils.resizeArray(receivedPkts, lastSN); //FIXME
+					if (Utils.count(receivedPktsLastChunk, false) == 0)
+					theEnd = true;
+					break;
+				}
 
 				break;
 
@@ -285,17 +251,29 @@ public class Server {
 				Utils.logg("Invalid packet received: neither DATA nor EOB");
 			}
 
-
-			// TODO: (for the Client as well) Maybe read/write asynchronously from/to file so as to optimize computational time for I/O operations?
-
 		}
 		
+		// Send multiple FIN
+		UTPpacket finPacket = new UTPpacket();
+		finPacket.dstAddr = clientAddr;
+		finPacket.dstPort = (short) clientPort;
+		finPacket.function = UTPpacket.FUNCT_FIN;
+		for (int i = 0; i < NUMBER_OF_FIN; i++) {
+			sendUtpPkt(finPacket, socket, channelAddr, channelPort);
+		}
+
+
 		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;
 		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + futureBlockArrivals + " data packets from future blocks");
 		Utils.logg(totNumBytes + " bytes received");
 		
+		fileOutputStream.write(writeBuffer, 0, totNumBytes);
+		
 		System.out.println("Bye bye, Client! ;-)");
 	}
+	
+	
+
 
 
 
