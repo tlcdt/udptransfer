@@ -1,16 +1,24 @@
 package tlcnet.udptest;
 
-import java.io.*;
-import java.net.*;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.text.DecimalFormat;
 import java.util.Arrays;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
+
+
 
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 2500;
+	private static final short ACK_TIMEOUT = 5000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int PKT_SIZE = 128;
@@ -69,7 +77,7 @@ public class Client
 			socket.close();
 			return;
 		}
-		FileChannel inChannel = theFile.getChannel();
+		FileInputStream inStream = new FileInputStream(theFile.getFD());
 
 
 
@@ -87,16 +95,12 @@ public class Client
 
 		// Start stopwatch
 		long startTransferTime = System.currentTimeMillis();
-		
-		
-		boolean finish = false;
-		
-		
-		int bn = 1;				// Current block number
-		int totBytesSent = 0;	// Counter for total bytes sent
+
+		int totBytesRead = 0;	// Counter 
 //		int[] bnWnd = new int[]{1, 1};
 		final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 		final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
+		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 		
 		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
 		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
@@ -109,183 +113,154 @@ public class Client
 		pendingEobAck = new boolean[BLOCKS_IN_BUFFER];
 		boolean[] isBlockAcked = new boolean[BLOCKS_IN_BUFFER];
 		
-
-		// This is used to read from file enough data to fill a block
-		ByteBuffer chunkContainer = ByteBuffer.allocate(BUFFER_SIZE);
-		
 		boolean theEnd = false;
+		
+		// Bytes of useful data in the tx buffer
+		int bufferedBytes = 0;
 
+
+		// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
+		byte[] txBuffer = new byte[BUFFER_SIZE];
+
+		int bytesRead = inStream.read(txBuffer, 0, txBuffer.length);
+
+		// Update total byte counter
+		totBytesRead += bytesRead;
+		bufferedBytes += bytesRead;
+
+		// Compute number of packets in the buffer
+		int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
+
+		Arrays.fill(toBeSent, 0, bufferedPkts, true); //FIXME
+
+
+		// 
+		try {
+			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
+			// toBeSent is now all-false
+		} catch (IOException e) {
+			System.err.println("I/O error while sending data");
+			socket.close(); theFile.close(); inStream.close(); System.exit(-1);
+		}
+
+
+		long timerStart = System.currentTimeMillis();
+		long timeout = ACK_TIMEOUT;
 		while(!theEnd) {
-			if (inChannel.read(chunkContainer) <= 0)
-				break;
 
-			// Now that the buffer is full, flip it in order to perform read operations on it
-			chunkContainer.flip();
-
-			int bufferedBytes = chunkContainer.remaining();
-			
-			// Update total byte counter
-			totBytesSent += bufferedBytes; //not the right place...
-			
-			// Compute number of packets in the current block
-			int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
-
-			// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
-			byte[] txBuffer = new byte[BUFFER_SIZE];	
-
-			//
-			chunkContainer.get(txBuffer, 0, bufferedBytes);
-
-			// Flip again the buffer, to prepare it for the write operation (inChannel.read)
-			chunkContainer.flip();
-
-			Arrays.fill(toBeSent, 0, bufferedPkts, true); //FIXME
-			
-
-			// 
-			try {
-				sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
-				// toBeSent is now all-false
-			} catch (IOException e) {
-				System.err.println("I/O error while sending data");
-				socket.close(); theFile.close(); System.exit(-1);
-			}
-
-
-			long timerStart = System.currentTimeMillis();
-			long timeout = 5000; //FIXME
-			while(!theEnd) {
-				
-				if (System.currentTimeMillis() > timerStart + timeout) { //timeout since last sent EOB expired
-					theEnd = true;
-					for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
-						if (pendingEobAck[j]) {
-							Utils.logg("timeout: resending EOB " + (j+1));
-							sendDatagram(socket, eob[j]);
+			if (System.currentTimeMillis() > timerStart + timeout) { //timeout since last sent EOB expired
+				theEnd = true;
+				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
+					if (pendingEobAck[j]) {
+						Utils.logg("timeout: resending EOB " + bnInBuffer[j]);
+						sendDatagram(socket, eob[j]);
 //							sendDatagram(socket, eob[j]);
 //							sendDatagram(socket, eob[j]);
 //							sendDatagram(socket, eob[j]);
-							timerStart = System.currentTimeMillis();
-							theEnd = false;
-						}
-					if (theEnd)
-						break;
-				}
-
-				// ---- Receive packet ----
-				byte[] recvBuf = new byte[RX_BUFSIZE];
-				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-
-				try {
-					socket.setSoTimeout(1);
-					socket.receive(recvPkt);
-				} catch (SocketTimeoutException e) {
-
-					continue;
-				} catch(SocketException e) {
-					System.err.println("Error while setting socket timeout");
-					socket.close(); System.exit(-1);
-				} catch(IOException e) {
-					System.err.println("I/O error while receiving datagram:\n" + e);
-					socket.close(); System.exit(-1);
-				}
-
-
-				// ---- Process received packet ----
-
-				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
-				UTPpacket recvEobAck = new UTPpacket(recvData);		// Parse UDP payload
-
-				if (recvEobAck.function == UTPpacket.FUNCT_FIN) {
-					theEnd = true;
+						timerStart = System.currentTimeMillis();
+						theEnd = false;
+					}
+				if (theEnd) { // FIXME is this block useful at the end of transmission? Isn't the FIN packet enough?
+					Utils.logg("Timeout: no FIN received, but all data has been ACKed. Exit!");
 					break;
 				}
-				
-				// It's not EOB_ACK -> listen again
-				if (recvEobAck.function != UTPpacket.FUNCT_EOB_ACK)
-					continue;
+			}
 
+			// ---- Receive packet ----
+			byte[] recvBuf = new byte[RX_BUFSIZE];
+			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 
-				// It's an EOB_ACK
-				Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
-				timerStart = System.currentTimeMillis();
-				int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
-				int ackedBn = recvEobAck.endOfBlockAck.bn;
-				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
-				int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
-				int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
-				int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
-				pendingEobAck[bnIndexInBuffer] = false;
-				if (numMissingPkts == 0)
-					isBlockAcked[bnIndexInBuffer] = true;
-				for (int j = 0; j < numMissingPkts; j++) {
-					int pktInd = missingPkts[j] - snOffset + blockOffset;
-					toBeSent[pktInd] = true;
-				}
-				
-//				for (int i=0; i<eob.length; i++)
-//					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
-				sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
+			try {
+				socket.setSoTimeout(1);
+				socket.receive(recvPkt);
+			} catch (SocketTimeoutException e) {
 
-				for (int i=0; i<eob.length; i++)
-					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
-				
-				if(isBlockAcked[0]) { // block at index zero is fine: shift
-					Utils.logg("shift");
-					
-				}
-
-				/*if(! pendingEobAck[0]) { // block at index zero is fine: shift
-					for (int i = 0; i < pendingEobAck.length - 1; i++)
-						pendingEobAck[i] = pendingEobAck[i+1]; // FIXME più bello? metodo già pronto?
-					pendingEobAck[pendingEobAck.length] = false;
-
-
-					if (inChannel.read(chunkContainer) <= 0)
-						break;
-
-					chunkContainer.flip();
-					int bufferedBytes1 = chunkContainer.remaining();
-					totBytesSent += bufferedBytes1; //not the right place...
-
-
-					System.arraycopy(txBuffer, PKTS_IN_BLOCK * PKT_SIZE, txBuffer, 0, txBuffer.length - PKTS_IN_BLOCK*PKT_SIZE);
-					int size = Math.min(PKTS_IN_BLOCK * PKT_SIZE, bufferedBytes1);
-					chunkContainer.get(txBuffer, txBuffer.length - PKTS_IN_BLOCK*PKT_SIZE, size);
-
-					// Flip again the buffer, to prepare it for the write operation (inChannel.read)
-					chunkContainer.flip();
-
-
-
-
-					for (int i = 0; i < bnInBuffer.length - 1; i++)
-						bnInBuffer[i] = bnInBuffer[i+1]; // FIXME più bello? metodo già pronto?
-					lastBn++;
-					bnInBuffer[bnInBuffer.length] = lastBn;
-
-
-					System.arraycopy(toBeSent, PKTS_IN_BLOCK * PKT_SIZE, toBeSent, 0, toBeSent.length - PKTS_IN_BLOCK*PKT_SIZE);
-					Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK*PKT_SIZE, toBeSent.length, true);
-
-
-
-					eob = sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
-				}*/
-				
-
-
+				continue;
+			} catch(SocketException e) {
+				System.err.println("Error while setting socket timeout");
+				socket.close(); System.exit(-1);
+			} catch(IOException e) {
+				System.err.println("I/O error while receiving datagram:\n" + e);
+				socket.close(); System.exit(-1);
 			}
 
 
+			// ---- Process received packet ----
 
-			
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
+			UTPpacket recvEobAck = new UTPpacket(recvData);		// Parse UDP payload
+
+			if (recvEobAck.function == UTPpacket.FUNCT_FIN) {
+				theEnd = true;
+				break;
+			}
+
+			// It's not EOB_ACK -> listen again
+			if (recvEobAck.function != UTPpacket.FUNCT_EOB_ACK)
+				continue;
+
+
+			// It's an EOB_ACK
+			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
+			timerStart = System.currentTimeMillis();
+			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
+			int ackedBn = recvEobAck.endOfBlockAck.bn;
+			int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
+			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
+			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
+			int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
+			pendingEobAck[bnIndexInBuffer] = false;
+			if (numMissingPkts == 0)
+				isBlockAcked[bnIndexInBuffer] = true;
+			for (int j = 0; j < numMissingPkts; j++) {
+				int pktInd = missingPkts[j] - snOffset + blockOffset;
+				toBeSent[pktInd] = true;
+			}
+
+//				for (int i=0; i<eob.length; i++)
+//					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
+
+
+			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { // block at index zero is fine, and we still have data in the tx buffer: shift
+
+				Utils.logg("BN " + bnInBuffer[0] + " was received -> shifting...");
+
+				// Shift tx buffer
+				Utils.shiftArrayLeft(txBuffer, BYTES_IN_BLOCK);
+				
+				// Read data and write them into the tx buffer
+				bytesRead = inStream.read(txBuffer, txBuffer.length - BYTES_IN_BLOCK, BYTES_IN_BLOCK);
+				if (bytesRead == -1) // eof
+					bytesRead = 0;
+				
+				// Counters and stuff
+				totBytesRead += bytesRead;
+				bufferedBytes -= BYTES_IN_BLOCK;
+				bufferedBytes += bytesRead;
+				int newPkts = Math.min(PKTS_IN_BLOCK, bytesRead / PKT_SIZE + 1);
+				Utils.logg("Read " + bytesRead + " more bytes from file");
+
+				// Shift and update other entities
+				Utils.shiftArrayLeft(pendingEobAck, 1);
+				Utils.shiftArrayLeft(eob, 1);
+				Utils.shiftArrayLeft(isBlockAcked, 1);
+				Utils.shiftArrayLeft(bnInBuffer, 1);
+				bnInBuffer[bnInBuffer.length - 1] = ++lastBn;
+				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
+				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);
+
+				try { //FIXME temp
+					Thread.sleep(200);
+				} catch (InterruptedException e) {e.printStackTrace();}
+			}
+
+			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
 		}
-		
+
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
-		double transferRate = totBytesSent / 1024 / elapsedTime;
+		double transferRate = totBytesRead / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
-		System.out.println(totBytesSent + " bytes sent");
+		System.out.println(totBytesRead + " bytes sent");
 		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkt + " packets were actually sent");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
@@ -347,8 +322,9 @@ public class Client
 			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr) throws IOException {
 		
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
-		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;
-		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;
+		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;		
+		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK; // FIXME check bufferedbytes > 0 (or at least non-negative!)
+		
 		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
 			numBlocks = BLOCKS_IN_BUFFER;
 			bytesInLastBlock = BYTES_IN_BLOCK;
@@ -363,12 +339,12 @@ public class Client
 				bytesInThisBlock = bytesInLastBlock;
 			
 			int numPktsInThisBlock = Math.min(PKTS_IN_BLOCK, bytesInThisBlock / PKT_SIZE + 1);
-//			Utils.logg("pkts in block " + (i+1) + " = " + numPktsInThisBlock);
 			byte[] txBuf_thisBlock = new byte[bytesInThisBlock];
 			System.arraycopy(txBuffer, BYTES_IN_BLOCK * i, txBuf_thisBlock, 0, bytesInThisBlock);
 			
-			boolean[] toBeSent_thisBlock = new boolean[numPktsInThisBlock];
-			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock);
+			boolean[] toBeSent_thisBlock = new boolean[PKTS_IN_BLOCK];
+//			Utils.logg(numPktsInThisBlock + " pkts in block " + bnInBuffer[i]);
+			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock); // numPktsInThisBlock can be substituted by PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end
 			
 			sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);
 
@@ -379,9 +355,8 @@ public class Client
 			eob[i] = eobPkt;
 			
 			try {
-				Thread.sleep(800);
+				Thread.sleep(800); //FIXME
 			} catch (InterruptedException e) {
-				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 			

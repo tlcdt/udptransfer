@@ -1,6 +1,7 @@
 package tlcnet.udptest;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 //FIXME These methods are bad: no input check!
 
@@ -108,5 +109,28 @@ public class Utils {
 	
 	public static void logg(Object obj) {
 		System.out.println(obj);
+	}
+	
+	
+	
+	
+	public static void shiftArrayLeft(Object[] array, int offset) {
+		System.arraycopy(array, offset, array, 0, array.length - offset);
+		Arrays.fill(array, array.length - offset, array.length, null);
+	}
+	
+	public static void shiftArrayLeft(boolean[] array, int offset) {
+		System.arraycopy(array, offset, array, 0, array.length - offset);
+		Arrays.fill(array, array.length - offset, array.length, false);
+	}
+	
+	public static void shiftArrayLeft(int[] array, int offset) {
+		System.arraycopy(array, offset, array, 0, array.length - offset);
+		Arrays.fill(array, array.length - offset, array.length, 0);
+	}
+	
+	public static void shiftArrayLeft(byte[] array, int offset) {
+		System.arraycopy(array, offset, array, 0, array.length - offset);
+		Arrays.fill(array, array.length - offset, array.length, (byte) 0);
 	}
 }

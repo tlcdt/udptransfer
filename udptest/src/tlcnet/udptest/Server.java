@@ -254,6 +254,7 @@ public class Server {
 		}
 		
 		// Send multiple FIN
+		Utils.logg("Sending multiple FIN...\n");
 		UTPpacket finPacket = new UTPpacket();
 		finPacket.dstAddr = clientAddr;
 		finPacket.dstPort = (short) clientPort;
