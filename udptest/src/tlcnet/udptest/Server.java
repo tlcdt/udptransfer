@@ -20,19 +20,20 @@ public class Server {
 	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks
 	private static final int RX_PKT_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
-
-	private static final int INIT_BLOCKSIZE = 60; // TODO: this must be updated when receiving
-
-	private static final int INVALID_PKTSIZE = -1;
+	private static final int INVALID = -1;
 	
 	static final int PKT_SIZE = Client.PKT_SIZE;
 	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
-	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER * 10; //TODO temp
-	static final int BLOCKSIZE = PKTS_IN_BLOCK * PKT_SIZE;
-	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
-	static final int BUFFERSIZE = BLOCKSIZE * BLOCKS_IN_BUFFER;
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO temp
 	
+	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
+	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
+	static final int BUFFERSIZE = BYTES_IN_BLOCK * BLOCKS_IN_BUFFER;
 
+	static int listenPort = DEF_SERVER_PORT;
+	static int channelPort = DEF_CHANNEL_PORT;
+	static int clientPort = Client.DEF_CLIENT_PORT;
+	static InetAddress clientAddr = null;
 
 
 
@@ -40,13 +41,9 @@ public class Server {
 	public static void main(String[] args) throws IOException {
 
 		final int NUMBER_OF_FIN = 10;
-		int listenPort = DEF_SERVER_PORT;
-		int channelPort = DEF_CHANNEL_PORT;
-		int clientPort = Client.DEF_CLIENT_PORT;
-		InetAddress clientAddr = null;
 		InetAddress channelAddr = null;
 		String filename = null;
-		FileOutputStream fileOutputStream = null;
+		FileOutputStream outStream = null;
 
 		// Check input parameters
 		if (args.length != 2) {
@@ -61,7 +58,7 @@ public class Server {
 
 			// Create output file and overwrite if it already exists
 			filename = args[1];
-			fileOutputStream = new FileOutputStream(filename, false);
+			outStream = new FileOutputStream(filename, false);
 
 		} catch (UnknownHostException e) {
 			System.err.println(e); return;
@@ -76,7 +73,7 @@ public class Server {
 			socket.setSoTimeout(END_TIMEOUT);
 		} catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
-			fileOutputStream.close(); System.exit(-1);
+			outStream.close(); System.exit(-1);
 		}
 
 
@@ -94,58 +91,48 @@ public class Server {
 
 
 		// 
-		byte[] writeBuffer = new byte[BUFFERSIZE];
+		byte[] rxBuffer = new byte[BUFFERSIZE];
 	
 		// File statistics
 		int totNumPackets = 0;
 		int totNumBytes = 0;
+		int bytesWritten = 0;
 
 		
 		// Counters for duplicate data packets and packets belonging to future BNs
 		// (for performance analysis purpose)
 		int duplicateCounter = 0;
-		int futureBlockArrivals = 0;
+		int outOfWindowCounter = 0;
 
 		// Array of flags. If receivedPkts[i] is true, the packet of index i in this block
 		// has been received by this server.
 		boolean[] receivedPkts = new boolean[PKTS_IN_BUFFER]; // all false
-
-		int bytesInCurrBlock = -1;
+		
+		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
+		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
+			bnInBuffer[i] = i+1;
+		int windowLast = BLOCKS_IN_BUFFER;
+		int windowFirst = 1;
+		int sizeOfLastPkt = INVALID;
+		int bufferedBytes = 0;
 
 
 		boolean theEnd = false; //Needed to stop the cycle
-		boolean lastBlock = false;
-		int lastSN = 0;
+		boolean canShift = false;
+		int lastSN = INVALID;
+		int lastBN = INVALID;
 		while(!theEnd)
 		{
 
-			// ---- Receive packet ----
+			// Receive UDP datagram
+			DatagramPacket recvPkt = receiveDatagram(socket);
 
-			byte[] recvBuf = new byte[RX_PKT_BUFSIZE];
-			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-			try {
-				socket.receive(recvPkt);
-			} catch (SocketTimeoutException e) {		
-				System.out.println("Closing connection: FIN not received...");
-				break;
-			} catch(IOException e) {
-				System.err.println("I/O error while receiving datagram:\n" + e);
-				socket.close(); System.exit(-1);
-			}
-
-			
-			
-//			Arrays.fill(receivedPkts, false);
-
-
-
-			// ---- Process packet ----
-
-			// payload of received UDP packet
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());
+			// Process packet
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // payload of received UDP packet
 			UTPpacket recvUTPpkt = new UTPpacket(recvData);			// parse payload
 			channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
 
+//			TODO Arrays.fill(receivedPkts, false);
 
 			//DEBUG
 			//Utils.logg("    Received  -  header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
@@ -155,102 +142,147 @@ public class Server {
 
 			switch (recvUTPpkt.function) {
 			case UTPpacket.FUNCT_DATA:
-
-				// Note: if a packet from a block BN>currBN arrives, blockSize increases and this packet
-				// is thought to be of the current BN. Later, when the first block ends, we will know the
-				// actual size of the block and truncate the appropriate arrays to size blockSize.
-					
+			{
+				int bn = (recvUTPpkt.sn - 1) / PKTS_IN_BLOCK + 1;
+				if (bn < windowFirst || bn > windowLast) {
+					//Utils.logg("Received packet outside current window (BN = " + bn + ")");
+					outOfWindowCounter++;
+					if(bn < windowFirst)
+						duplicateCounter++;
+					break;
+				}
+				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn); // TODO fix all this part after implementing a real window
+				
+				
 				// If pktSize was defined, and this packet is smaller than usual, this must be
 				// the last packet of the last block: end of transmission!
-				if (PKT_SIZE != recvUTPpkt.payl.length) { // this should never happen except in the end of transmission
-					lastBlock = true;
-					lastSN = recvUTPpkt.sn;
-					int pktsInLastBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BLOCK + 1;
-					bytesInCurrBlock = (pktsInLastBlock - 1) * PKT_SIZE + recvUTPpkt.payl.length;
+				if (PKT_SIZE != recvUTPpkt.payl.length) {
 					
-					// Save total number of packets and bytes of the file
-					totNumPackets = recvUTPpkt.sn;
-					totNumBytes = (recvUTPpkt.sn - 1) * PKT_SIZE + recvUTPpkt.payl.length;
-					// TODO compute these counters along the way, not here at the end!
+					if (sizeOfLastPkt == INVALID && lastSN == INVALID) {
+						lastSN = recvUTPpkt.sn;
+						lastBN = bn;
+						sizeOfLastPkt = recvUTPpkt.payl.length;
+						//int pktsInLastBlock = (lastSN - 1) % PKTS_IN_BLOCK + 1;
+						//bytesInLastBlock = (pktsInLastBlock - 1) * PKT_SIZE + sizeOfLastPkt;
+
+						// Save total number of packets and bytes of the file
+						totNumPackets = lastSN;
+						totNumBytes = (lastSN - 1) * PKT_SIZE + sizeOfLastPkt;
+						// TODO compute these counters along the way, not here at the end!
+					}
+					
+					else if (sizeOfLastPkt != INVALID && lastSN != INVALID && (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn)) {
+						System.err.println("Two different final packets... Don't know what to do!");
+						Utils.logg(lastSN + " with size " + sizeOfLastPkt + " and now " + recvUTPpkt.sn + " with size " + recvUTPpkt.payl.length);
+						System.exit(-1);
+					}
+					else if (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn) {
+						Utils.logg("LOL " + lastSN + " with size " + sizeOfLastPkt + " and now " + recvUTPpkt.sn + " with size " + recvUTPpkt.payl.length);
+						System.exit(-1);
+					}
+					
 				}
 
-				// Index [0, blockSize] of this packet in the current block
-				int pktIndexInCurrBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BUFFER;
+				int snOffsetInBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BLOCK; // Position of this packet in its block: it can range from 0 to PKTS_IN_BLOCK-1
+				int pktIndexInBuffer = bnIndexInBuffer * PKTS_IN_BLOCK + snOffsetInBlock;
 				
-				// Index of the first byte of the packet in the write buffer: we're gonna write it there.
-				int pktByteOffsInCurrBlock = pktIndexInCurrBlock * PKT_SIZE;
+				// Index of the first byte of the packet in the rx buffer: we're gonna write it there.
+				int pktByteOffsInBuffer = pktIndexInBuffer * PKT_SIZE;
 				
-				// If we're here, the received data belongs to the current block. If it was already received, record it and continue.
-//				Utils.logg("arraylength= " + receivedPkts.length + "\tindex=" + pktIndexInCurrBlock);
-				if (receivedPkts[pktIndexInCurrBlock]) {
+				// If it was already received, record it and continue.
+				if (receivedPkts[pktIndexInBuffer]) {
 					duplicateCounter++;
 					//Utils.logg("Received SN=" + recvUTPpkt.sn + " duplicate");
 					break;
 				}
 				
 				// Copy received data in the write buffer at the correct position
-				System.arraycopy(recvUTPpkt.payl, 0, writeBuffer, pktByteOffsInCurrBlock, recvUTPpkt.payl.length);
+				System.arraycopy(recvUTPpkt.payl, 0, rxBuffer, pktByteOffsInBuffer, recvUTPpkt.payl.length);
 				
-				// Update receivedPkts array
-				receivedPkts[pktIndexInCurrBlock] = true;
+				// Update the array receivedPkts and the counter of buffered data
+				receivedPkts[pktIndexInBuffer] = true;
+				bufferedBytes += recvUTPpkt.payl.length;
 				
-				Utils.logg("Received SN=" + recvUTPpkt.sn);
-				//Utils.logg(" == Pkt " + recvUTPpkt.sn + ": " + new String(recvUTPpkt.payl).substring(0, 12));
+				//Utils.logg("Received SN=" + recvUTPpkt.sn);
 
 				break;
-
-
+			}
 
 
 
 			case UTPpacket.FUNCT_EOB:
-
-
+			{
 				// -- Fill in the array with missing SNs
-				
-				int[] missingSN = new int[PKTS_IN_BUFFER];
-				int missingSNindex = 0;
-				for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
-					if (! receivedPkts[i + PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1)])
-						missingSN[missingSNindex++] = i + PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1) + 1;
+				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, bnInBuffer);
+				int bn = recvUTPpkt.endOfBlock.bn;
+				if (missingSN == null) {
+					if (bn > windowLast || (lastBN != INVALID && bn > lastBN))
+						break;
+					if (bn < windowFirst) { // this condition shouldn't be necessary if we implement a simple linear window
+						// Send ACK for old EOB
+						Utils.logg("Sending ACK for old BN=" + bn);
+						UTPpacket eobAckPkt = getEobAckPacket(bn, new int[0]);
+						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
+						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort); // try harder: the client won't even respond to this
+						break;
+					}
 				}
-				missingSN = Arrays.copyOf(missingSN, missingSNindex); // Truncate
-
-				Utils.logg(missingSNindex + "pkt\t missing from BN=" + recvUTPpkt.endOfBlock.bn);
+				else
+					Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
 				
 				// -- Assemble and send EOB_ACK
 				
-				UTPpacket eobAckPkt = new UTPpacket();
-				eobAckPkt.sn = UTPpacket.INVALID_SN;
-				eobAckPkt.dstAddr = clientAddr;
-				eobAckPkt.dstPort = (short) clientPort;
-				eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
-				eobAckPkt.setEndOfBlockAck(recvUTPpkt.endOfBlock.bn, missingSN);
-				Utils.logg("Sending ACK for BN=" + recvUTPpkt.endOfBlock.bn);
+				Utils.logg("Sending ACK for BN=" + bn);
+				UTPpacket eobAckPkt = getEobAckPacket(bn, missingSN);
 				sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
 				if (missingSN.length == 0) {
 					// *This block has been received!*
-					Utils.logg("Received correctly BN=" + recvUTPpkt.endOfBlock.bn);
-					if (!lastBlock)
-						bytesInCurrBlock = BLOCKSIZE;
+					Utils.logg("Received correctly BN=" + bn);
+					if (bn == windowFirst)
+						canShift = true;
 				}
+				
+				
+				while (canShift) {
 
-				// This is the ACTUAL end of transmission
-				if (lastBlock) {
-					boolean[] receivedPktsLastChunk = Utils.resizeArray(receivedPkts, lastSN); //FIXME
-					if (Utils.count(receivedPktsLastChunk, false) == 0)
-					theEnd = true;
-					break;
+					Utils.logg("Shifting...");
+					// Before shifting we need to know how many bytes we must write. Full block? Or is this the last block? We get this info from the size of the buffer alone.
+					
+					// Write on file the proper amount of bytes (the first block in the buffer)
+					int bytesInThisBlock = Math.min(BYTES_IN_BLOCK, bufferedBytes);
+					outStream.write(rxBuffer, 0, bytesInThisBlock);
+					
+					// Shift tx buffer
+					Utils.shiftArrayLeft(rxBuffer, BYTES_IN_BLOCK);
+
+					// Counters
+					bytesWritten += bytesInThisBlock;
+					bufferedBytes -= bytesInThisBlock;
+
+					// Shift and update other entities
+					Utils.shiftArrayLeft(bnInBuffer, 1);
+					bnInBuffer[bnInBuffer.length - 1] = ++windowLast;
+					Utils.shiftArrayLeft(receivedPkts, PKTS_IN_BLOCK); // indices not corresponding to any packet are false, so we must pay attention and not consider them
+					windowFirst++;
+
+					// See whether this is the last block, and decide if we can shift again the window
+					int pktsInThisBlock = PKTS_IN_BLOCK;
+					if (windowFirst == lastBN) { // we know which is the last BN, and it is now the first (and only one) in the buffer
+						pktsInThisBlock = (lastSN - 1) % PKTS_IN_BLOCK + 1;
+						theEnd = true;
+					}
+					boolean[] receivedPktsOldestBlock = Utils.resizeArray(receivedPkts, pktsInThisBlock);
+					canShift = (Utils.count(receivedPktsOldestBlock, false) == 0) && (receivedPktsOldestBlock.length > 0);
 				}
 
 				break;
+			}
 
 			default:
 				// Ignore any other type of packet
 				Utils.logg("Invalid packet received: neither DATA nor EOB");
 			}
-
 		}
 		
 		// Send multiple FIN
@@ -264,13 +296,94 @@ public class Server {
 		}
 
 
-		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;
-		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + futureBlockArrivals + " data packets from future blocks");
-		Utils.logg(totNumBytes + " bytes received");
-		
-		fileOutputStream.write(writeBuffer, 0, totNumBytes);
+		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;//FIXME
+		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + outOfWindowCounter + " data packets outside the window");
+		Utils.logg(bytesWritten + " bytes written on disk");
 		
 		System.out.println("Bye bye, Client! ;-)");
+	}
+
+
+
+
+
+
+
+
+	/**
+	 * @param bn
+	 * @param missingSN
+	 * @return
+	 */
+	private static UTPpacket getEobAckPacket(int bn, int[] missingSN) {
+		UTPpacket eobAckPkt = new UTPpacket();
+		eobAckPkt.sn = UTPpacket.INVALID_SN;
+		eobAckPkt.dstAddr = clientAddr;
+		eobAckPkt.dstPort = (short) clientPort;
+		eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
+		eobAckPkt.setEndOfBlockAck(bn, missingSN);
+		return eobAckPkt;
+	}
+
+
+
+
+
+
+
+
+	/**
+	 * @param receivedPkts
+	 * @param recvUTPpkt
+	 * @param bnInBuffer
+	 * @return
+	 */
+	private static int[] getMissingSN(boolean[] receivedPkts, UTPpacket recvUTPpkt, int[] bnInBuffer) {
+		
+		int[] missingSN;
+		int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, recvUTPpkt.endOfBlock.bn); // TODO fix all this part after implementing a real window
+		if (bnIndexInBuffer < 0) //FIXME
+			return null;
+		missingSN = new int[PKTS_IN_BLOCK];
+		int firstSnOfThisBlock = PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1) + 1;
+		
+		int missingSNindex = 0;
+		for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
+			if (! receivedPkts[i + bnIndexInBuffer * PKTS_IN_BLOCK])
+				missingSN[missingSNindex++] = i + firstSnOfThisBlock;
+		}
+		
+		return Arrays.copyOf(missingSN, missingSNindex); // Truncate;
+	}
+
+
+
+
+
+
+
+
+	/**
+	 * Receives a datagram from the given socket and returns it. It stops execution of the process if
+	 * socket.receive() reaches the timeout set for this socket, or if an I/O error occurs.
+	 * 
+	 * @param socket - the socket on which the datagram will be received
+	 * @return the received datagram
+	 */
+	private static DatagramPacket receiveDatagram(DatagramSocket socket) {
+
+		byte[] recvBuf = new byte[RX_PKT_BUFSIZE];
+		DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
+		try {
+			socket.receive(recvPkt);
+		} catch (SocketTimeoutException e) {		
+			System.err.println("Connection timeout: exiting");
+			System.exit(-1);
+		} catch(IOException e) {
+			System.err.println("I/O error while receiving datagram:\n" + e);
+			socket.close(); System.exit(-1);
+		}
+		return recvPkt;
 	}
 	
 	

@@ -21,9 +21,10 @@ public class Client
 	private static final short ACK_TIMEOUT = 5000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
-	static final int PKT_SIZE = 128;
-	static final int PKTS_IN_BLOCK = 4;
-	static final int BLOCKS_IN_BUFFER = 5;
+	
+	static final int PKT_SIZE = 640;
+	static final int PKTS_IN_BLOCK = 50;
+	static final int BLOCKS_IN_BUFFER = 20;
 
 	private static final int channelPort = DEF_CHANNEL_PORT;
 	private static final int dstPort = Server.DEF_SERVER_PORT;
@@ -154,13 +155,13 @@ public class Client
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInBuffer[j]);
 						sendDatagram(socket, eob[j]);
-//							sendDatagram(socket, eob[j]);
-//							sendDatagram(socket, eob[j]);
-//							sendDatagram(socket, eob[j]);
-						timerStart = System.currentTimeMillis();
+//						sendDatagram(socket, eob[j]);
+//						sendDatagram(socket, eob[j]);
+//						sendDatagram(socket, eob[j]);
+						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						theEnd = false;
 					}
-				if (theEnd) { // FIXME is this block useful at the end of transmission? Isn't the FIN packet enough?
+				if (theEnd) { // is this block useful at the end of transmission? Isn't the FIN packet enough?
 					Utils.logg("Timeout: no FIN received, but all data has been ACKed. Exit!");
 					break;
 				}
@@ -206,6 +207,7 @@ public class Client
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 			int ackedBn = recvEobAck.endOfBlockAck.bn;
 			int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
+			if (bnIndexInBuffer < 0) continue;	// FIXME all this part with real window
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
 			int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
@@ -220,9 +222,10 @@ public class Client
 //				for (int i=0; i<eob.length; i++)
 //					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
 
-
-			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { // block at index zero is fine, and we still have data in the tx buffer: shift
-
+			
+			// block at index zero is fine, and we still have data in the tx buffer: shift
+			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { 
+				
 				Utils.logg("BN " + bnInBuffer[0] + " was received -> shifting...");
 
 				// Shift tx buffer
@@ -247,11 +250,7 @@ public class Client
 				Utils.shiftArrayLeft(bnInBuffer, 1);
 				bnInBuffer[bnInBuffer.length - 1] = ++lastBn;
 				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
-				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);
-
-				try { //FIXME temp
-					Thread.sleep(200);
-				} catch (InterruptedException e) {e.printStackTrace();}
+				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
 			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
@@ -322,7 +321,7 @@ public class Client
 			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr) throws IOException {
 		
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
-		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;		
+		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;	
 		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK; // FIXME check bufferedbytes > 0 (or at least non-negative!)
 		
 		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
@@ -353,12 +352,6 @@ public class Client
 			
 			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInBuffer[i], numPktsInThisBlock);
 			eob[i] = eobPkt;
-			
-			try {
-				Thread.sleep(800); //FIXME
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
 			
 			sendDatagram(socket, eobPkt);
 //			sendDatagram(socket, eobPkt);
