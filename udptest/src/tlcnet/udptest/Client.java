@@ -12,6 +12,9 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.text.DecimalFormat;
 import java.util.Arrays;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
 
 
 
@@ -21,6 +24,9 @@ public class Client
 	private static final short ACK_TIMEOUT = 5000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
+	
+	private static final int CORE_POOL_SIZE = 1000;
+	private static final int EOB_DELAY = 300;
 	
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 50;
@@ -32,6 +38,7 @@ public class Client
 	private static int sentDataPkt = 0;
 	private static int numDataPkt = 0;
 	private static int eobSn = 1;
+	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 	
 	private static boolean[] pendingEobAck;
 	private static DatagramPacket[] eob = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
@@ -75,8 +82,7 @@ public class Client
 			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader
 		} catch(FileNotFoundException e)	{
 			System.err.println("Error: file not found");
-			socket.close();
-			return;
+			socket.close();	return;
 		}
 		FileInputStream inStream = new FileInputStream(theFile.getFD());
 
@@ -119,6 +125,7 @@ public class Client
 		// Bytes of useful data in the tx buffer
 		int bufferedBytes = 0;
 
+		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
 
 		// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 		byte[] txBuffer = new byte[BUFFER_SIZE];
@@ -137,7 +144,7 @@ public class Client
 
 		// 
 		try {
-			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
+			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
 			// toBeSent is now all-false
 		} catch (IOException e) {
 			System.err.println("I/O error while sending data");
@@ -155,9 +162,8 @@ public class Client
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInBuffer[j]);
 						sendDatagram(socket, eob[j]);
-//						sendDatagram(socket, eob[j]);
-//						sendDatagram(socket, eob[j]);
-//						sendDatagram(socket, eob[j]);
+						sendDatagram(socket, eob[j]);
+						sendDatagram(socket, eob[j]);
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						theEnd = false;
 					}
@@ -202,12 +208,16 @@ public class Client
 
 
 			// It's an EOB_ACK
-			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
+			
 			timerStart = System.currentTimeMillis();
+			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 			int ackedBn = recvEobAck.endOfBlockAck.bn;
 			int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
 			if (bnIndexInBuffer < 0) continue;	// FIXME all this part with real window
+
+			//if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
+			
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
 			int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
@@ -219,10 +229,6 @@ public class Client
 				toBeSent[pktInd] = true;
 			}
 
-//				for (int i=0; i<eob.length; i++)
-//					Utils.logg(pendingEobAck[i] + "\t" + eob[i]);
-
-			
 			// block at index zero is fine, and we still have data in the tx buffer: shift
 			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { 
 				
@@ -253,7 +259,7 @@ public class Client
 				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
-			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr);
+			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
 		}
 
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
@@ -263,8 +269,10 @@ public class Client
 		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkt + " packets were actually sent");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
-	}
+		Utils.logg(dupEobHandler.misses());
 
+		schedExec.shutdownNow();
+	}
 
 
 
@@ -318,7 +326,7 @@ public class Client
 	 * @throws IOException if an I/O error occurs in the socket while sending the datagram
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int[] bnInBuffer,int bufferedBytes,
-			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr) throws IOException {
+			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, ScheduledThreadPoolExecutor schedExec) throws IOException {
 		
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;	
@@ -345,18 +353,18 @@ public class Client
 //			Utils.logg(numPktsInThisBlock + " pkts in block " + bnInBuffer[i]);
 			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock); // numPktsInThisBlock can be substituted by PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end
 			
-			sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);
-
-			if (Utils.count(toBeSent_thisBlock, true) == 0)
-				continue; // don't send EOB
+			int numPktsToSend = Utils.count(toBeSent_thisBlock, true);
+			if (numPktsToSend == 0)
+				continue;
 			
+			int numTxForCurrBlock = 5;//getNumTransmissions(numPktsToSend);
+			for (int j = 0; j < numTxForCurrBlock; j++)
+				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);
+
 			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInBuffer[i], numPktsInThisBlock);
 			eob[i] = eobPkt;
 			
-			sendDatagram(socket, eobPkt);
-//			sendDatagram(socket, eobPkt);
-//			sendDatagram(socket, eobPkt);
-//			sendDatagram(socket, eobPkt);
+			schedExec.schedule(new SendDelayedPacket(socket, eobPkt, 6), EOB_DELAY, TimeUnit.MILLISECONDS);
 			pendingEobAck[i] = true;
 			
 //			Utils.logg("METHOD -> " + pendingEobAck[i] + "\t" + eob[i]);
@@ -373,6 +381,19 @@ public class Client
 	
 	
 	
+	private static int getNumTransmissions(int numPktsToSend) {
+		return Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.2)));
+	} //TODO cache
+
+
+
+
+
+
+
+
+
+
 	/**
 	 * @param txBuffer
 	 * @param toBeSent
@@ -434,7 +455,6 @@ public class Client
 			// --- Send UDP datagram ---
 
 			//Utils.logg("Sending SN=" + sendUTPpkt.sn);
-			//socket.send(sndPkt);
 			sendDatagram(socket, sndPkt);
 			sentDataPkt++;
 		}
@@ -459,6 +479,51 @@ public class Client
 		} catch(IOException e) {
 			System.err.println("I/O error while sending EOB datagram");
 			socket.close(); System.exit(-1);;
+		}
+	}
+	
+	
+	
+	
+	
+	
+	
+	/**
+	 * This is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay
+	 * that was decided for the current packet. In order to perform the task of sending the packet,
+	 * this class needs to be passed the packet itself, together with the input and output socket
+	 * (the input socket is only needed because it must be closed if an error occurs).
+	 *
+	 */
+	private static class SendDelayedPacket implements Runnable
+	{
+		private DatagramSocket dstSock;
+		private DatagramPacket sendPkt;
+		private int times;
+
+		public SendDelayedPacket(DatagramSocket dstSock, DatagramPacket sendPkt) {
+			this(dstSock, sendPkt, 1);
+		}
+		
+		public SendDelayedPacket(DatagramSocket dstSock, DatagramPacket sendPkt, int times) {
+			super();
+			this.dstSock = dstSock;
+			this.sendPkt = sendPkt;
+			this.times = times;
+		}
+
+
+		@Override
+		public void run() {
+
+			try {
+				for (int i = 0; i < times; i++)
+					dstSock.send(sendPkt);
+			}
+			catch(IOException e) {
+				System.err.println("I/O error while sending datagram:\n" + e);
+				dstSock.close(); System.exit(-1);
+			}
 		}
 	}
 }

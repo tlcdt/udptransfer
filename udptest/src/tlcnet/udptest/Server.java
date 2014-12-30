@@ -34,6 +34,9 @@ public class Server {
 	static int channelPort = DEF_CHANNEL_PORT;
 	static int clientPort = Client.DEF_CLIENT_PORT;
 	static InetAddress clientAddr = null;
+	
+	static int eobSn = 1;
+	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 
 
 
@@ -99,14 +102,14 @@ public class Server {
 		int bytesWritten = 0;
 
 		
-		// Counters for duplicate data packets and packets belonging to future BNs
-		// (for performance analysis purpose)
+		// Counters for duplicate data packets and packets belonging to future BNs (for performance analysis purpose)
 		int duplicateCounter = 0;
 		int outOfWindowCounter = 0;
 
-		// Array of flags. If receivedPkts[i] is true, the packet of index i in this block
-		// has been received by this server.
+		// Array of flags. If receivedPkts[i] is true, the packet of index i in the buffer has been received by this server.
 		boolean[] receivedPkts = new boolean[PKTS_IN_BUFFER]; // all false
+		
+		boolean[] blockAcked = new boolean[BLOCKS_IN_BUFFER];
 		
 		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
 		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
@@ -117,7 +120,7 @@ public class Server {
 		int bufferedBytes = 0;
 
 
-		boolean theEnd = false; //Needed to stop the cycle
+		boolean theEnd = false;
 		boolean canShift = false;
 		int lastSN = INVALID;
 		int lastBN = INVALID;
@@ -132,20 +135,11 @@ public class Server {
 			UTPpacket recvUTPpkt = new UTPpacket(recvData);			// parse payload
 			channelAddr = recvPkt.getAddress();			// get sender (=channel) address and port
 
-//			TODO Arrays.fill(receivedPkts, false);
-
-			//DEBUG
-			//Utils.logg("    Received  -  header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			//Utils.logg("    Received SN=" + recvUTPpkt.sn);
-			//Utils.logg("\nPayload length = " + recvUTPpkt.payl.length);
-
-
 			switch (recvUTPpkt.function) {
 			case UTPpacket.FUNCT_DATA:
 			{
 				int bn = (recvUTPpkt.sn - 1) / PKTS_IN_BLOCK + 1;
 				if (bn < windowFirst || bn > windowLast) {
-					//Utils.logg("Received packet outside current window (BN = " + bn + ")");
 					outOfWindowCounter++;
 					if(bn < windowFirst)
 						duplicateCounter++;
@@ -154,16 +148,13 @@ public class Server {
 				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn); // TODO fix all this part after implementing a real window
 				
 				
-				// If pktSize was defined, and this packet is smaller than usual, this must be
-				// the last packet of the last block: end of transmission!
+				// If pktSize was defined, and this packet is smaller than usual, this must be the last packet of the last block: end of transmission!
 				if (PKT_SIZE != recvUTPpkt.payl.length) {
 					
 					if (sizeOfLastPkt == INVALID && lastSN == INVALID) {
 						lastSN = recvUTPpkt.sn;
 						lastBN = bn;
 						sizeOfLastPkt = recvUTPpkt.payl.length;
-						//int pktsInLastBlock = (lastSN - 1) % PKTS_IN_BLOCK + 1;
-						//bytesInLastBlock = (pktsInLastBlock - 1) * PKT_SIZE + sizeOfLastPkt;
 
 						// Save total number of packets and bytes of the file
 						totNumPackets = lastSN;
@@ -177,7 +168,7 @@ public class Server {
 						System.exit(-1);
 					}
 					else if (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn) {
-						Utils.logg("LOL " + lastSN + " with size " + sizeOfLastPkt + " and now " + recvUTPpkt.sn + " with size " + recvUTPpkt.payl.length);
+						Utils.logg("wut");
 						System.exit(-1);
 					}
 					
@@ -213,6 +204,7 @@ public class Server {
 			case UTPpacket.FUNCT_EOB:
 			{
 				// -- Fill in the array with missing SNs
+				//if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue;
 				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, bnInBuffer);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
@@ -220,25 +212,30 @@ public class Server {
 						break;
 					if (bn < windowFirst) { // this condition shouldn't be necessary if we implement a simple linear window
 						// Send ACK for old EOB
-						Utils.logg("Sending ACK for old BN=" + bn);
-						UTPpacket eobAckPkt = getEobAckPacket(bn, new int[0]);
+						//Utils.logg("Sending ACK for old BN=" + bn);
+						UTPpacket eobAckPkt = assembleEobAckPacket(bn, new int[0]);
 						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort); // try harder: the client won't even respond to this
 						break;
 					}
 				}
-				else
-					Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
+				//else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
+
+				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn);
+				//if(blockAcked[bnIndexInBuffer]) continue;
 				
 				// -- Assemble and send EOB_ACK
-				
-				Utils.logg("Sending ACK for BN=" + bn);
-				UTPpacket eobAckPkt = getEobAckPacket(bn, missingSN);
-				sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 
+				int numOfEobAckTx = 6;//missingSN.length / 50 + 3;
+				//Utils.logg("Sending ACK for BN=" + bn);
+				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
+				for (int k = 0; k < numOfEobAckTx; k++)
+					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
+				
 				if (missingSN.length == 0) {
 					// *This block has been received!*
 					Utils.logg("Received correctly BN=" + bn);
+					blockAcked[bnIndexInBuffer] = true;
 					if (bn == windowFirst)
 						canShift = true;
 				}
@@ -261,6 +258,7 @@ public class Server {
 					bufferedBytes -= bytesInThisBlock;
 
 					// Shift and update other entities
+					Utils.shiftArrayLeft(blockAcked, 1);
 					Utils.shiftArrayLeft(bnInBuffer, 1);
 					bnInBuffer[bnInBuffer.length - 1] = ++windowLast;
 					Utils.shiftArrayLeft(receivedPkts, PKTS_IN_BLOCK); // indices not corresponding to any packet are false, so we must pay attention and not consider them
@@ -315,17 +313,16 @@ public class Server {
 	 * @param missingSN
 	 * @return
 	 */
-	private static UTPpacket getEobAckPacket(int bn, int[] missingSN) {
+	private static UTPpacket assembleEobAckPacket(int bn, int[] missingSN) {
+		
 		UTPpacket eobAckPkt = new UTPpacket();
-		eobAckPkt.sn = UTPpacket.INVALID_SN;
+		eobAckPkt.sn = eobSn++;
 		eobAckPkt.dstAddr = clientAddr;
 		eobAckPkt.dstPort = (short) clientPort;
 		eobAckPkt.function = UTPpacket.FUNCT_EOB_ACK;
 		eobAckPkt.setEndOfBlockAck(bn, missingSN);
 		return eobAckPkt;
 	}
-
-
 
 
 
