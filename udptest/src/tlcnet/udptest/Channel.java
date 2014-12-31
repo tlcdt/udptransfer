@@ -22,7 +22,6 @@ public class Channel {
 	public static void main(String[] args) {
 		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
-//		int droppedPkts = 0;
 		
 		// --- Create listen and send sockets ---
 		
@@ -67,23 +66,22 @@ public class Channel {
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
 			int dstPort = (int)utpPkt.dstPort & 0xffff;
 			byte[] sendData = recvData; // useless but clear
-
+			
 			
 			// ---- Send packet ----
 			
 			if (mustDrop(utpPkt.payl.length)) {
-				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
-//				droppedPkts++;
+//				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
 			
 			
 			//DEBUG
-			if (dstPort == Client.DEF_CLIENT_PORT)
-				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			else if (dstPort == Server.DEF_SERVER_PORT)
-				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
+//			if (dstPort == Client.DEF_CLIENT_PORT)
+//				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
+//			else if (dstPort == Server.DEF_SERVER_PORT)
+//				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
 //			if (utpPkt.function == UTPpacket.FUNCT_DATA)
 //				Utils.logg("SN=" + utpPkt.sn);
 			
@@ -92,7 +90,7 @@ public class Channel {
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
 //			Utils.logg("Delay=" + rndDelay + " ms");
-			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
+			schedExec.schedule(new DelayedPacketSender(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
 
 		}
 
@@ -108,13 +106,13 @@ public class Channel {
 	 * (the input socket is only needed because it must be closed if an error occurs).
 	 *
 	 */
-	private static class SendDelayedPacket implements Runnable
+	private static class DelayedPacketSender implements Runnable
 	{
 		private DatagramSocket dstSock;
 		private DatagramSocket srcSock;
 		private DatagramPacket sendPkt;
 
-		public SendDelayedPacket(DatagramSocket dstSock, DatagramSocket srcSock, DatagramPacket sendPkt) {
+		public DelayedPacketSender(DatagramSocket dstSock, DatagramSocket srcSock, DatagramPacket sendPkt) {
 			super();
 			this.dstSock = dstSock;
 			this.srcSock = srcSock;

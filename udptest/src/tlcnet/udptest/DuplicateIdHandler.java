@@ -3,8 +3,8 @@ package tlcnet.udptest;
 import java.util.Arrays;
 
 public class DuplicateIdHandler {
-	private static final int WNDSIZE = 10000;
-	private static final int WNDSHIFT= 1000;
+	private static final int WNDSIZE = 40000;
+	private static final int WNDSHIFT= 4000;
 	
 	//private int wndSize;
 	private int wndShift;

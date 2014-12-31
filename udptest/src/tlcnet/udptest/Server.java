@@ -24,7 +24,7 @@ public class Server {
 	
 	static final int PKT_SIZE = Client.PKT_SIZE;
 	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
-	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO temp
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO update these?
 	
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
@@ -204,7 +204,7 @@ public class Server {
 			case UTPpacket.FUNCT_EOB:
 			{
 				// -- Fill in the array with missing SNs
-				//if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue;
+				//if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue; // TODO This halves the throughput. Maybe we should send even more ACKs?
 				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, bnInBuffer);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
@@ -222,11 +222,11 @@ public class Server {
 				//else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
 
 				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn);
-				//if(blockAcked[bnIndexInBuffer]) continue;
+				if(blockAcked[bnIndexInBuffer]) continue;
 				
 				// -- Assemble and send EOB_ACK
 
-				int numOfEobAckTx = 6;//missingSN.length / 50 + 3;
+				int numOfEobAckTx = 50;//missingSN.length / 50 + 3;
 				//Utils.logg("Sending ACK for BN=" + bn);
 				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
 				for (int k = 0; k < numOfEobAckTx; k++)
@@ -242,8 +242,8 @@ public class Server {
 				
 				
 				while (canShift) {
-
-					Utils.logg("Shifting...");
+					//Utils.logg("Shifting...");
+					
 					// Before shifting we need to know how many bytes we must write. Full block? Or is this the last block? We get this info from the size of the buffer alone.
 					
 					// Write on file the proper amount of bytes (the first block in the buffer)
@@ -294,7 +294,7 @@ public class Server {
 		}
 
 
-		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;//FIXME
+		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;
 		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + outOfWindowCounter + " data packets outside the window");
 		Utils.logg(bytesWritten + " bytes written on disk");
 		

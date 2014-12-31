@@ -26,7 +26,9 @@ public class Client
 	static final int DEF_CLIENT_PORT = 65431;
 	
 	private static final int CORE_POOL_SIZE = 1000;
-	private static final int EOB_DELAY = 300;
+	private static final int EOB_PRE_SLEEP = 0;
+	private static final int EOB_PRE_DELAY = 100;
+	private static final int EOB_INTER_DELAY = 20;
 	
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 50;
@@ -35,10 +37,12 @@ public class Client
 	private static final int channelPort = DEF_CHANNEL_PORT;
 	private static final int dstPort = Server.DEF_SERVER_PORT;
 	
-	private static int sentDataPkt = 0;
+	private static int sentDataPkts = 0;
+	private static int sentEobPkts = 0;
 	private static int numDataPkt = 0;
 	private static int eobSn = 1;
 	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
+	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	
 	private static boolean[] pendingEobAck;
 	private static DatagramPacket[] eob = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
@@ -139,7 +143,7 @@ public class Client
 		// Compute number of packets in the buffer
 		int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
 
-		Arrays.fill(toBeSent, 0, bufferedPkts, true); //FIXME
+		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
 
 		// 
@@ -161,14 +165,15 @@ public class Client
 				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInBuffer[j]);
-						sendDatagram(socket, eob[j]);
-						sendDatagram(socket, eob[j]);
-						sendDatagram(socket, eob[j]);
+						int times=3;
+						for (int k = 0; k < times; k++)
+							sendDatagram(socket, eob[j]);
+						sentEobPkts += times;
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						theEnd = false;
 					}
 				if (theEnd) { // is this block useful at the end of transmission? Isn't the FIN packet enough?
-					Utils.logg("Timeout: no FIN received, but all data has been ACKed. Exit!");
+					System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
 					break;
 				}
 			}
@@ -216,7 +221,7 @@ public class Client
 			int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
 			if (bnIndexInBuffer < 0) continue;	// FIXME all this part with real window
 
-			//if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
+			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
 			
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
@@ -266,11 +271,13 @@ public class Client
 		double transferRate = totBytesRead / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
 		System.out.println(totBytesRead + " bytes sent");
-		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkt + " packets were actually sent");
+		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkts + " data packets were actually sent");
+		System.out.println(sentEobPkts + " EOB packets were sent");
+		System.out.println((sentDataPkts + sentEobPkts) + " total packets sent to channel");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
+		
 		Utils.logg(dupEobHandler.misses());
-
 		schedExec.shutdownNow();
 	}
 
@@ -357,23 +364,30 @@ public class Client
 			if (numPktsToSend == 0)
 				continue;
 			
-			int numTxForCurrBlock = 5;//getNumTransmissions(numPktsToSend);
+			int numTxForCurrBlock = getNumTransmissions(numPktsToSend);
+			//Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInBuffer[i] + " (" + numTxForCurrBlock + " times)");
 			for (int j = 0; j < numTxForCurrBlock; j++)
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);
 
 			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInBuffer[i], numPktsInThisBlock);
 			eob[i] = eobPkt;
 			
-			schedExec.schedule(new SendDelayedPacket(socket, eobPkt, 6), EOB_DELAY, TimeUnit.MILLISECONDS);
+			try {
+				Thread.sleep(EOB_PRE_SLEEP);
+			} catch (InterruptedException e) {
+				//e.printStackTrace();
+			}
+			int TEMPTIMES = 6; // FIXME
+			schedExec.schedule(new DelayedPacketSender(socket, eobPkt, TEMPTIMES, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
 			pendingEobAck[i] = true;
-			
-//			Utils.logg("METHOD -> " + pendingEobAck[i] + "\t" + eob[i]);
-
+//			sendDatagram(socket, eobPkt);
+//			sendDatagram(socket, eobPkt);
+//			sendDatagram(socket, eobPkt);
+			sentEobPkts += TEMPTIMES;
 		}
 		
 		// Updates toBeSent array to specify that there are no pending packets to be sent
 		Arrays.fill(toBeSent, 0, toBeSent.length, false);
-
 	}
 
 
@@ -382,8 +396,10 @@ public class Client
 	
 	
 	private static int getNumTransmissions(int numPktsToSend) {
-		return Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.2)));
-	} //TODO cache
+		if (numTransmissionsCache[numPktsToSend-1] == 0)
+			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.2)));
+		return numTransmissionsCache[numPktsToSend-1];
+	}
 
 
 
@@ -412,8 +428,6 @@ public class Client
 		
 		// Offset for SN: the first packet of block bn has SN=snOffset
 		int snOffset = 1 + PKTS_IN_BLOCK * (bn - 1);
-
-		Utils.logg("- Sending " + Utils.count(toBeSent, true) + " packets from BN=" + bn);
 
 		// Loop through packets in the current block, and send them away recklessly
 		// Note that this loop may exceed the actual number of packets in this block, hence those dummy
@@ -456,7 +470,7 @@ public class Client
 
 			//Utils.logg("Sending SN=" + sendUTPpkt.sn);
 			sendDatagram(socket, sndPkt);
-			sentDataPkt++;
+			sentDataPkts++;
 		}
 
 
@@ -477,7 +491,7 @@ public class Client
 		try {
 			socket.send(sndPkt);
 		} catch(IOException e) {
-			System.err.println("I/O error while sending EOB datagram");
+			System.err.println("I/O error while sending datagram");
 			socket.close(); System.exit(-1);;
 		}
 	}
@@ -495,21 +509,28 @@ public class Client
 	 * (the input socket is only needed because it must be closed if an error occurs).
 	 *
 	 */
-	private static class SendDelayedPacket implements Runnable
+	private static class DelayedPacketSender implements Runnable
 	{
 		private DatagramSocket dstSock;
 		private DatagramPacket sendPkt;
 		private int times;
+		private int interDelay;
 
-		public SendDelayedPacket(DatagramSocket dstSock, DatagramPacket sendPkt) {
+		@SuppressWarnings("unused")
+		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt) {
 			this(dstSock, sendPkt, 1);
 		}
 		
-		public SendDelayedPacket(DatagramSocket dstSock, DatagramPacket sendPkt, int times) {
+		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt, int times, int interDelay) {
 			super();
 			this.dstSock = dstSock;
 			this.sendPkt = sendPkt;
 			this.times = times;
+			this.interDelay = interDelay;
+		}
+		
+		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt, int times) {
+			this(dstSock, sendPkt, times, 0);
 		}
 
 
@@ -517,10 +538,14 @@ public class Client
 		public void run() {
 
 			try {
-				for (int i = 0; i < times; i++)
+				for (int i = 0; i < times; i++) {
 					dstSock.send(sendPkt);
-			}
-			catch(IOException e) {
+					if (interDelay > 0)
+						Thread.sleep(interDelay);
+				}
+			}catch (InterruptedException e) {
+				//e.printStackTrace();
+			} catch(IOException e) {
 				System.err.println("I/O error while sending datagram:\n" + e);
 				dstSock.close(); System.exit(-1);
 			}
