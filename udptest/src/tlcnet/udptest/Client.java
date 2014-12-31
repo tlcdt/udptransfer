@@ -27,8 +27,8 @@ public class Client
 	
 	private static final int CORE_POOL_SIZE = 1000;
 	private static final int EOB_PRE_SLEEP = 0;
-	private static final int EOB_PRE_DELAY = 100;
-	private static final int EOB_INTER_DELAY = 20;
+	private static final int EOB_PRE_DELAY = 60; // TODO In localhost, with parameters {640, 50, 20}, this is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 5;
 	
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 50;

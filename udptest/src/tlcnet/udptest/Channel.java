@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
-	private static final int CORE_POOL_SIZE = 100; // TODO: check this
+	private static final int CORE_POOL_SIZE = 1000;
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
 	
@@ -146,7 +146,6 @@ public class Channel {
 	 */
 	private static boolean mustDrop(int length) {
 		double discard_prob = 1 - Math.exp(-length/(double)1024);
-		//discard_prob = 0.3; // fixed probability: useful for testing loss of control packets
 		boolean discard = new Random().nextDouble() <= discard_prob;
 		return discard;
 	}
