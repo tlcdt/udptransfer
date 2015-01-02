@@ -33,6 +33,9 @@ public class Client
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 1200;
 	static final int BLOCKS_IN_BUFFER = 8;
+	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
+	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
+	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 
 	private static final int channelPort = DEF_CHANNEL_PORT;
 	private static final int dstPort = Server.DEF_SERVER_PORT;
@@ -45,7 +48,7 @@ public class Client
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	
 	private static boolean[] pendingEobAck;
-	private static DatagramPacket[] eob = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
+	private static DatagramPacket[] eobCache = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
 
 	// FIXME If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
@@ -108,15 +111,9 @@ public class Client
 		long startTransferTime = System.currentTimeMillis();
 
 		int totBytesRead = 0;	// Counter 
-//		int[] bnWnd = new int[]{1, 1};
-		final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
-		final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
-		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 		
-		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
-		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
-			bnInBuffer[i] = i+1;
-		int lastBn = BLOCKS_IN_BUFFER;
+		int windowLeft = 1;
+		//int windowRight = BLOCKS_IN_BUFFER;
 		
 		//
 		boolean[] toBeSent = new boolean[PKTS_IN_BUFFER];
@@ -148,7 +145,7 @@ public class Client
 
 		// 
 		try {
-			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
 			// toBeSent is now all-false
 		} catch (IOException e) {
 			System.err.println("I/O error while sending data");
@@ -164,10 +161,10 @@ public class Client
 				theEnd = true;
 				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
 					if (pendingEobAck[j]) {
-						Utils.logg("timeout: resending EOB " + bnInBuffer[j]);
+						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 						int times=3;
 						for (int k = 0; k < times; k++)
-							sendDatagram(socket, eob[j]);
+							sendDatagram(socket, eobCache[j]);
 						sentEobPkts += times;
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						theEnd = false;
@@ -218,17 +215,19 @@ public class Client
 			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 			int ackedBn = recvEobAck.endOfBlockAck.bn;
-			int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, ackedBn);
-			if (bnIndexInBuffer < 0) continue;	// FIXME all this part with real window
+			
+			// Index of this packet's block in the current window
+			int bnIndexInWindow = ackedBn - windowLeft;
+			if (bnIndexInWindow < 0 || bnIndexInWindow > BLOCKS_IN_BUFFER - 1) continue;
 
 			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
 			
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
-			int blockOffset = bnIndexInBuffer * PKTS_IN_BLOCK;
-			pendingEobAck[bnIndexInBuffer] = false;
+			int blockOffset = bnIndexInWindow * PKTS_IN_BLOCK;
+			pendingEobAck[bnIndexInWindow] = false;
 			if (numMissingPkts == 0)
-				isBlockAcked[bnIndexInBuffer] = true;
+				isBlockAcked[bnIndexInWindow] = true;
 			for (int j = 0; j < numMissingPkts; j++) {
 				int pktInd = missingPkts[j] - snOffset + blockOffset;
 				toBeSent[pktInd] = true;
@@ -237,7 +236,7 @@ public class Client
 			// block at index zero is fine, and we still have data in the tx buffer: shift
 			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { 
 				
-				Utils.logg("BN " + bnInBuffer[0] + " was received -> shifting...");
+				Utils.logg("BN " + windowLeft + " was received -> shifting...");
 
 				// Shift tx buffer
 				Utils.shiftArrayLeft(txBuffer, BYTES_IN_BLOCK);
@@ -256,15 +255,15 @@ public class Client
 
 				// Shift and update other entities
 				Utils.shiftArrayLeft(pendingEobAck, 1);
-				Utils.shiftArrayLeft(eob, 1);
+				Utils.shiftArrayLeft(eobCache, 1);
 				Utils.shiftArrayLeft(isBlockAcked, 1);
-				Utils.shiftArrayLeft(bnInBuffer, 1);
-				bnInBuffer[bnInBuffer.length - 1] = ++lastBn;
+				windowLeft++;
+				//windowRight++;
 				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
 				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
-			sendBlocksAndEobs(txBuffer, toBeSent, bnInBuffer, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
 		}
 
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
@@ -285,6 +284,20 @@ public class Client
 
 
 
+	/**
+	 * Returns the Block Number of the block that is at the specified index in the current window.
+	 * Returns 0 if the index is invalid.
+	 * 
+	 * @param index
+	 * @param windowLeft
+	 * @return - the Block Number of the block that is at the specified index in the current window.<br>
+	 * - the value 0 if the index is invalid.
+	 */
+	private static int bnInWindow(int index, int windowLeft) {
+		if (index < 0 || index > BLOCKS_IN_BUFFER - 1)
+			return 0;
+		return index + windowLeft;
+	}
 
 
 
@@ -324,7 +337,7 @@ public class Client
 	/**
 	 * @param txBuffer
 	 * @param toBeSent
-	 * @param bnInBuffer - Block Numbers of the blocks we are trying to send.
+	 * @param windowLeft - Block Number of the leftmost block in the current window.
 	 * @param bufferedBytes - the actual number of bytes in the buffer. It is generally fixed, but it can be
 	 * any number between 0 and BUFFER_SIZE if the last block is also the last block of the file transfer operation.
 	 * @param socket - the socket on which send and receive operations are performed
@@ -332,7 +345,7 @@ public class Client
 	 * @param dstAddr - IP address of the destination (Server)
 	 * @throws IOException if an I/O error occurs in the socket while sending the datagram
 	 */
-	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int[] bnInBuffer,int bufferedBytes,
+	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
 			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, ScheduledThreadPoolExecutor schedExec) throws IOException {
 		
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
@@ -367,10 +380,10 @@ public class Client
 			int numTxForCurrBlock = getNumTransmissions(numPktsToSend);
 			//Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInBuffer[i] + " (" + numTxForCurrBlock + " times)");
 			for (int j = 0; j < numTxForCurrBlock; j++)
-				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInBuffer[i], socket, channelAddr, dstAddr);
+				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
 
-			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInBuffer[i], numPktsInThisBlock);
-			eob[i] = eobPkt;
+			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInWindow(i, windowLeft), numPktsInThisBlock);
+			eobCache[i] = eobPkt;
 			
 			try {
 				Thread.sleep(EOB_PRE_SLEEP);
@@ -495,19 +508,4 @@ public class Client
 			socket.close(); System.exit(-1);;
 		}
 	}
-	
-	
-	
-	
-	
-	
-	
-	/**
-	 * This is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay
-	 * that was decided for the current packet. In order to perform the task of sending the packet,
-	 * this class needs to be passed the packet itself, together with the input and output socket
-	 * (the input socket is only needed because it must be closed if an error occurs).
-	 *
-	 */
-	
 }
