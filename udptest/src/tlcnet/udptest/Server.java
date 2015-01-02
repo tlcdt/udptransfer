@@ -24,7 +24,7 @@ public class Server {
 	
 	static final int PKT_SIZE = Client.PKT_SIZE;
 	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
-	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO update these?
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO update these during transmission?
 	
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
@@ -97,9 +97,10 @@ public class Server {
 		byte[] rxBuffer = new byte[BUFFERSIZE];
 	
 		// File statistics
-		int totNumPackets = 0;
-		int totNumBytes = 0;
+		int receivedPackets = 0;
 		int bytesWritten = 0;
+		int bufferedBytes = 0;
+		int receivedBytes = 0;
 
 		
 		// Counters for duplicate data packets and packets belonging to future BNs (for performance analysis purpose)
@@ -114,10 +115,9 @@ public class Server {
 		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
 		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
 			bnInBuffer[i] = i+1;
-		int windowLast = BLOCKS_IN_BUFFER;
-		int windowFirst = 1;
+		int windowRight = BLOCKS_IN_BUFFER;
+		int windowLeft = 1;
 		int sizeOfLastPkt = INVALID;
-		int bufferedBytes = 0;
 
 
 		boolean theEnd = false;
@@ -139,9 +139,9 @@ public class Server {
 			case UTPpacket.FUNCT_DATA:
 			{
 				int bn = (recvUTPpkt.sn - 1) / PKTS_IN_BLOCK + 1;
-				if (bn < windowFirst || bn > windowLast) {
+				if (bn < windowLeft || bn > windowRight) {
 					outOfWindowCounter++;
-					if(bn < windowFirst)
+					if(bn < windowLeft)
 						duplicateCounter++;
 					break;
 				}
@@ -155,11 +155,7 @@ public class Server {
 						lastSN = recvUTPpkt.sn;
 						lastBN = bn;
 						sizeOfLastPkt = recvUTPpkt.payl.length;
-
-						// Save total number of packets and bytes of the file
-						totNumPackets = lastSN;
-						totNumBytes = (lastSN - 1) * PKT_SIZE + sizeOfLastPkt;
-						// TODO compute these counters along the way, not here at the end!
+						Utils.logg("Last packet is SN=" + lastSN + " with size " + sizeOfLastPkt);
 					}
 					
 					else if (sizeOfLastPkt != INVALID && lastSN != INVALID && (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn)) {
@@ -168,8 +164,7 @@ public class Server {
 						System.exit(-1);
 					}
 					else if (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn) {
-						Utils.logg("wut");
-						System.exit(-1);
+						Utils.logg("wut"); System.exit(-1);
 					}
 					
 				}
@@ -193,6 +188,8 @@ public class Server {
 				// Update the array receivedPkts and the counter of buffered data
 				receivedPkts[pktIndexInBuffer] = true;
 				bufferedBytes += recvUTPpkt.payl.length;
+				receivedBytes += recvUTPpkt.payl.length;
+				receivedPackets++;
 				
 				//Utils.logg("Received SN=" + recvUTPpkt.sn);
 
@@ -208,9 +205,9 @@ public class Server {
 				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, bnInBuffer);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
-					if (bn > windowLast || (lastBN != INVALID && bn > lastBN))
+					if (bn > windowRight || (lastBN != INVALID && bn > lastBN))
 						break;
-					if (bn < windowFirst) { // this condition shouldn't be necessary if we implement a simple linear window
+					if (bn < windowLeft) { // this condition shouldn't be necessary if we implement a simple linear window
 						// Send ACK for old EOB
 						//Utils.logg("Sending ACK for old BN=" + bn);
 						UTPpacket eobAckPkt = assembleEobAckPacket(bn, new int[0]);
@@ -236,18 +233,20 @@ public class Server {
 					// *This block has been received!*
 					Utils.logg("Received correctly BN=" + bn);
 					blockAcked[bnIndexInBuffer] = true;
-					if (bn == windowFirst)
+					if (bn == windowLeft)
 						canShift = true;
 				}
 				
 				
+				
 				while (canShift) {
-					//Utils.logg("Shifting...");
+					Utils.logg("windowLeft=" + windowLeft + "  -  now shifting by 1");
 					
 					// Before shifting we need to know how many bytes we must write. Full block? Or is this the last block? We get this info from the size of the buffer alone.
 					
 					// Write on file the proper amount of bytes (the first block in the buffer)
 					int bytesInThisBlock = Math.min(BYTES_IN_BLOCK, bufferedBytes);
+					//if(bytesInThisBlock != BYTES_IN_BLOCK) Utils.logg("The buffer has only " + bufferedBytes + " bytes left: last block");
 					outStream.write(rxBuffer, 0, bytesInThisBlock);
 					
 					// Shift tx buffer
@@ -260,18 +259,18 @@ public class Server {
 					// Shift and update other entities
 					Utils.shiftArrayLeft(blockAcked, 1);
 					Utils.shiftArrayLeft(bnInBuffer, 1);
-					bnInBuffer[bnInBuffer.length - 1] = ++windowLast;
+					bnInBuffer[bnInBuffer.length - 1] = ++windowRight;
 					Utils.shiftArrayLeft(receivedPkts, PKTS_IN_BLOCK); // indices not corresponding to any packet are false, so we must pay attention and not consider them
-					windowFirst++;
+					windowLeft++;
 
 					// See whether this is the last block, and decide if we can shift again the window
 					int pktsInThisBlock = PKTS_IN_BLOCK;
-					if (windowFirst == lastBN) { // we know which is the last BN, and it is now the first (and only one) in the buffer
+					if (windowLeft == lastBN) // we know which is the last BN, and it is now the first (and only one) in the buffer
 						pktsInThisBlock = (lastSN - 1) % PKTS_IN_BLOCK + 1;
-						theEnd = true;
-					}
 					boolean[] receivedPktsOldestBlock = Utils.resizeArray(receivedPkts, pktsInThisBlock);
-					canShift = (Utils.count(receivedPktsOldestBlock, false) == 0) && (receivedPktsOldestBlock.length > 0);
+					canShift = (Utils.count(receivedPktsOldestBlock, false) == 0) && (pktsInThisBlock > 0);
+					if (windowLeft == lastBN + 1)
+						theEnd = true;
 				}
 
 				break;
@@ -281,6 +280,12 @@ public class Server {
 				// Ignore any other type of packet
 				Utils.logg("Invalid packet received: neither DATA nor EOB");
 			}
+		}
+		
+		
+		if (bufferedBytes > 0) { // should never happen except in case of bugs!
+			outStream.write(rxBuffer, 0, bufferedBytes);
+			System.out.println("What's happening? " + bufferedBytes + " bytes still in the buffer! Let's write them out");
 		}
 		
 		// Send multiple FIN
@@ -294,9 +299,9 @@ public class Server {
 		}
 
 
-		double percentRetxOverhead = (double)duplicateCounter/totNumPackets * 100;
+		double percentRetxOverhead = (double)duplicateCounter/receivedPackets * 100;
 		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + outOfWindowCounter + " data packets outside the window");
-		Utils.logg(bytesWritten + " bytes written on disk");
+		Utils.logg(receivedBytes + " bytes received\n" + bytesWritten + " bytes written on disk");
 		
 		System.out.println("Bye bye, Client! ;-)");
 	}

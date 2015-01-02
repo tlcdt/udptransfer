@@ -26,13 +26,13 @@ public class Client
 	static final int DEF_CLIENT_PORT = 65431;
 	
 	private static final int CORE_POOL_SIZE = 1000;
-	private static final int EOB_PRE_SLEEP = 0;
-	private static final int EOB_PRE_DELAY = 60; // TODO In localhost, with parameters {640, 50, 20}, this is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 5;
+	private static final int EOB_PRE_SLEEP = 1;
+	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 40;
 	
 	static final int PKT_SIZE = 640;
-	static final int PKTS_IN_BLOCK = 50;
-	static final int BLOCKS_IN_BUFFER = 20;
+	static final int PKTS_IN_BLOCK = 1200;
+	static final int BLOCKS_IN_BUFFER = 8;
 
 	private static final int channelPort = DEF_CHANNEL_PORT;
 	private static final int dstPort = Server.DEF_SERVER_PORT;
@@ -270,7 +270,7 @@ public class Client
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
 		double transferRate = totBytesRead / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
-		System.out.println(totBytesRead + " bytes sent");
+		System.out.println(totBytesRead + " bytes read");
 		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkts + " data packets were actually sent");
 		System.out.println(sentEobPkts + " EOB packets were sent");
 		System.out.println((sentDataPkts + sentEobPkts) + " total packets sent to channel");
