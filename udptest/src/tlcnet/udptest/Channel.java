@@ -38,15 +38,18 @@ public class Channel {
 		}
 
 		// Create object for async packet forwarding
-		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE); //TODO Check if threads close. Should this be inside the loop?
+		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
+		
+		// Create object for UDP parsing in order to get the destination port and address
+		ChannelGenericPacketParser pktParser = new ChannelGenericPacketParser();
 
 		
 		
-		// * * * *  MAIN LOOP  * * * *
+		// * * *  MAIN LOOP  * * *
 		
 		while(true) {
 			
-			// ---- Receive packet ----
+			// Receive packet
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 			try {
@@ -56,23 +59,36 @@ public class Channel {
 				listenSocket.close(); outSocket.close(); System.exit(-1);
 			}
 			
+			// Payload of received UDP datagram: this is also the payload of the outbound packet.
+			byte[] udpPayload = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());
 			
-			// ---- Process received packet and prepare new packet ----
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // payload of recv UDP datagram
-			UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
-			// FIXME: This is compatible only with our format. We should instead parse only the first 6 bytes of the payload.
+			// Parse the payload and get destination address and port
+			pktParser.setPayload(udpPayload);
+			InetAddress dstAddr = pktParser.getDstAddr();
+			int dstPort = pktParser.getDstPort();
+			
+			// The following is compatible only with our format.
+			/*UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
-			int dstPort = (int)utpPkt.dstPort & 0xffff;
-			byte[] sendData = recvData; // useless but clear
+			int dstPort = (int)utpPkt.dstPort & 0xffff;*/
 			
 			
-			// ---- Send packet ----
-			
-			if (mustDrop(utpPkt.payl.length)) {
-//				Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+			// Decide whether to drop the packet; if so, start listening again.
+			if (mustDrop(udpPayload.length)) {
+				//Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
-			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
+			
+			// Create the UDP datagram to be sent
+			DatagramPacket sendPkt = new DatagramPacket(udpPayload, udpPayload.length, dstAddr, dstPort);
+
+			// Execute thread that sends packet after a random time
+			long rndDelay = getRndDelay(udpPayload.length);
+			schedExec.schedule(new AsyncRepeatedPacketSender(outSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
+			
+			// AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
+			// was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
+			// the packet itself, together with the output socket.
 			
 			
 			//DEBUG
@@ -80,20 +96,11 @@ public class Channel {
 //				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
 //			else if (dstPort == Server.DEF_SERVER_PORT)
 //				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
-			
-			
-			
-			// Execute thread that sends packet after a random time
-			long rndDelay = getRndDelay(sendData.length);
-			schedExec.schedule(new AsyncRepeatedPacketSender(outSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
-			
-			// AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
-			// was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
-			// the packet itself, together with the output socket.
 		}
 	}
 
 
+	
 
 	
 	/**
