@@ -17,14 +17,11 @@ public class Channel {
 
 	
 	
-	
-	
 	public static void main(String[] args) {
 		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
 		
 		// --- Create listen and send sockets ---
-		
 		DatagramSocket listenSocket = null;
 		DatagramSocket outSocket = null;
 		try {
@@ -40,13 +37,14 @@ public class Channel {
 			listenSocket.close(); System.exit(-1);
 		}
 
+		// Create object for async packet forwarding
 		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE); //TODO Check if threads close. Should this be inside the loop?
 
+		
 		
 		// * * * *  MAIN LOOP  * * * *
 		
 		while(true) {
-			
 			
 			// ---- Receive packet ----
 			byte[] recvBuf = new byte[RX_BUFSIZE];
@@ -82,64 +80,25 @@ public class Channel {
 //				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
 //			else if (dstPort == Server.DEF_SERVER_PORT)
 //				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
-//			if (utpPkt.function == UTPpacket.FUNCT_DATA)
-//				Utils.logg("SN=" + utpPkt.sn);
 			
 			
 			
 			// Execute thread that sends packet after a random time
 			long rndDelay = getRndDelay(sendData.length);
-//			Utils.logg("Delay=" + rndDelay + " ms");
-			schedExec.schedule(new DelayedPacketSender(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
-
+			schedExec.schedule(new AsyncRepeatedPacketSender(outSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
+			
+			// AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
+			// was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
+			// the packet itself, together with the output socket.
 		}
-
-		
 	}
+
 
 
 	
 	/**
-	 * This is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay
-	 * that was decided for the current packet. In order to perform the task of sending the packet,
-	 * this class needs to be passed the packet itself, together with the input and output socket
-	 * (the input socket is only needed because it must be closed if an error occurs).
-	 *
-	 */
-	private static class DelayedPacketSender implements Runnable
-	{
-		private DatagramSocket dstSock;
-		private DatagramSocket srcSock;
-		private DatagramPacket sendPkt;
-
-		public DelayedPacketSender(DatagramSocket dstSock, DatagramSocket srcSock, DatagramPacket sendPkt) {
-			super();
-			this.dstSock = dstSock;
-			this.srcSock = srcSock;
-			this.sendPkt = sendPkt;
-		}
-
-
-		@Override
-		public void run() {
-
-			try {
-				dstSock.send(sendPkt);
-			}
-			catch(IOException e) {
-				System.err.println("I/O error while sending datagram:\n" + e);
-				dstSock.close(); srcSock.close(); System.exit(-1);
-			}
-		}
-	}
-
-	
-
-	
-	/**
-	 * Computes whether the channel should drop the current packet or forward it,
-	 * based on the packet drop probability, which depends on the length of the UDP
-	 * payload.
+	 * Computes whether the channel should drop the current packet or forward it, based
+	 * on the packet drop probability, which depends on the length of the UDP payload.
 	 * 
 	 * @param length - the length of the UTP packet (i.e. of the UDP payload)
 	 * @return true if the current packet must be dropped, false if it must be forwarded to its destination
@@ -165,7 +124,4 @@ public class Channel {
 		double delay = -Math.log(new Random().nextDouble()) * mean;
 		return Math.round(delay);
 	}
-	
-	
-
 }

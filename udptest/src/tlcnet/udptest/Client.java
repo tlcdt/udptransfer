@@ -378,7 +378,7 @@ public class Client
 				//e.printStackTrace();
 			}
 			int TEMPTIMES = 6; // FIXME
-			schedExec.schedule(new DelayedPacketSender(socket, eobPkt, TEMPTIMES, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
+			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, TEMPTIMES, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
 			pendingEobAck[i] = true;
 //			sendDatagram(socket, eobPkt);
 //			sendDatagram(socket, eobPkt);
@@ -509,46 +509,5 @@ public class Client
 	 * (the input socket is only needed because it must be closed if an error occurs).
 	 *
 	 */
-	private static class DelayedPacketSender implements Runnable
-	{
-		private DatagramSocket dstSock;
-		private DatagramPacket sendPkt;
-		private int times;
-		private int interDelay;
-
-		@SuppressWarnings("unused")
-		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt) {
-			this(dstSock, sendPkt, 1);
-		}
-		
-		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt, int times, int interDelay) {
-			super();
-			this.dstSock = dstSock;
-			this.sendPkt = sendPkt;
-			this.times = times;
-			this.interDelay = interDelay;
-		}
-		
-		public DelayedPacketSender(DatagramSocket dstSock, DatagramPacket sendPkt, int times) {
-			this(dstSock, sendPkt, times, 0);
-		}
-
-
-		@Override
-		public void run() {
-
-			try {
-				for (int i = 0; i < times; i++) {
-					dstSock.send(sendPkt);
-					if (interDelay > 0)
-						Thread.sleep(interDelay);
-				}
-			}catch (InterruptedException e) {
-				//e.printStackTrace();
-			} catch(IOException e) {
-				System.err.println("I/O error while sending datagram:\n" + e);
-				dstSock.close(); System.exit(-1);
-			}
-		}
-	}
+	
 }
