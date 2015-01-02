@@ -29,21 +29,22 @@ public class Server {
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int BUFFERSIZE = BYTES_IN_BLOCK * BLOCKS_IN_BUFFER;
+	
+	private static final int NUMBER_OF_FIN = 10;
 
-	static int listenPort = DEF_SERVER_PORT;
-	static int channelPort = DEF_CHANNEL_PORT;
-	static int clientPort = Client.DEF_CLIENT_PORT;
-	static InetAddress clientAddr = null;
+	private static int listenPort = DEF_SERVER_PORT;
+	private static int channelPort = DEF_CHANNEL_PORT;
+	private static int clientPort = Client.DEF_CLIENT_PORT;
+	private static InetAddress clientAddr = null;
 	
 	static int eobSn = 1;
-	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
+	//private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 
 
 
 
 	public static void main(String[] args) throws IOException {
 
-		final int NUMBER_OF_FIN = 10;
 		InetAddress channelAddr = null;
 		String filename = null;
 		FileOutputStream outStream = null;
@@ -93,37 +94,33 @@ public class Server {
 		// * * * * * * * * * * * * * *//
 
 
-		// 
-		byte[] rxBuffer = new byte[BUFFERSIZE];
-	
-		// File statistics
+
+		// Sent and received data statistics
 		int receivedPackets = 0;
 		int bytesWritten = 0;
 		int bufferedBytes = 0;
 		int receivedBytes = 0;
 
-		
 		// Counters for duplicate data packets and packets belonging to future BNs (for performance analysis purpose)
 		int duplicateCounter = 0;
 		int outOfWindowCounter = 0;
 
-		// Array of flags. If receivedPkts[i] is true, the packet of index i in the buffer has been received by this server.
+		// Arrays of flags. If receivedPkts[i] is true, the packet of index i in the buffer has been received
+		// by this server. The same applies to blockAcked as regards correct reception of whole blocks.
 		boolean[] receivedPkts = new boolean[PKTS_IN_BUFFER]; // all false
+		boolean[] isBlockAcked = new boolean[BLOCKS_IN_BUFFER];
 		
-		boolean[] blockAcked = new boolean[BLOCKS_IN_BUFFER];
-		
-		int[] bnInBuffer = new int[BLOCKS_IN_BUFFER];
-		for (int i = 0; i < BLOCKS_IN_BUFFER; i++)
-			bnInBuffer[i] = i+1;
+		// The first and last block in the window are windowLeft and windowRight. The window is the rx buffer.
 		int windowRight = BLOCKS_IN_BUFFER;
 		int windowLeft = 1;
+		byte[] rxBuffer = new byte[BUFFERSIZE];
+		
 		int sizeOfLastPkt = INVALID;
-
+		int lastSN = INVALID;
+		int lastBN = INVALID;
 
 		boolean theEnd = false;
 		boolean canShift = false;
-		int lastSN = INVALID;
-		int lastBN = INVALID;
 		while(!theEnd)
 		{
 
@@ -138,6 +135,7 @@ public class Server {
 			switch (recvUTPpkt.function) {
 			case UTPpacket.FUNCT_DATA:
 			{
+				// Get block number for this data packet, and discard if it's outside the window
 				int bn = (recvUTPpkt.sn - 1) / PKTS_IN_BLOCK + 1;
 				if (bn < windowLeft || bn > windowRight) {
 					outOfWindowCounter++;
@@ -145,10 +143,12 @@ public class Server {
 						duplicateCounter++;
 					break;
 				}
-				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn); // TODO fix all this part after implementing a real window
+				
+				// Index of this packet's block in the current window
+				int bnIndexInWindow = bn - windowLeft;
 				
 				
-				// If pktSize was defined, and this packet is smaller than usual, this must be the last packet of the last block: end of transmission!
+				// If pktSize was defined, and this packet is smaller than usual, this must be the last packet of the last block
 				if (PKT_SIZE != recvUTPpkt.payl.length) {
 					
 					if (sizeOfLastPkt == INVALID && lastSN == INVALID) {
@@ -157,26 +157,29 @@ public class Server {
 						sizeOfLastPkt = recvUTPpkt.payl.length;
 						Utils.logg("Last packet is SN=" + lastSN + " with size " + sizeOfLastPkt);
 					}
-					
+					// Two different final packets: this should never happen!
 					else if (sizeOfLastPkt != INVALID && lastSN != INVALID && (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn)) {
 						System.err.println("Two different final packets... Don't know what to do!");
 						Utils.logg(lastSN + " with size " + sizeOfLastPkt + " and now " + recvUTPpkt.sn + " with size " + recvUTPpkt.payl.length);
 						System.exit(-1);
 					}
+					// This makes no sense. TODO: check if it's _really_ impossible and delete these lines.
 					else if (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn) {
 						Utils.logg("wut"); System.exit(-1);
 					}
-					
 				}
 
-				int snOffsetInBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BLOCK; // Position of this packet in its block: it can range from 0 to PKTS_IN_BLOCK-1
-				int pktIndexInBuffer = bnIndexInBuffer * PKTS_IN_BLOCK + snOffsetInBlock;
+				// Position of this packet in its block: it can range from 0 to (PKTS_IN_BLOCK - 1)
+				int snOffsetInBlock = (recvUTPpkt.sn - 1) % PKTS_IN_BLOCK;
+				
+				// Position of this packet in the current window
+				int pktIndexInWindow = bnIndexInWindow * PKTS_IN_BLOCK + snOffsetInBlock;
 				
 				// Index of the first byte of the packet in the rx buffer: we're gonna write it there.
-				int pktByteOffsInBuffer = pktIndexInBuffer * PKT_SIZE;
+				int pktByteOffsInBuffer = pktIndexInWindow * PKT_SIZE;
 				
 				// If it was already received, record it and continue.
-				if (receivedPkts[pktIndexInBuffer]) {
+				if (receivedPkts[pktIndexInWindow]) {
 					duplicateCounter++;
 					//Utils.logg("Received SN=" + recvUTPpkt.sn + " duplicate");
 					break;
@@ -185,8 +188,8 @@ public class Server {
 				// Copy received data in the write buffer at the correct position
 				System.arraycopy(recvUTPpkt.payl, 0, rxBuffer, pktByteOffsInBuffer, recvUTPpkt.payl.length);
 				
-				// Update the array receivedPkts and the counter of buffered data
-				receivedPkts[pktIndexInBuffer] = true;
+				// Update the boolean register of received packets and various counters
+				receivedPkts[pktIndexInWindow] = true;
 				bufferedBytes += recvUTPpkt.payl.length;
 				receivedBytes += recvUTPpkt.payl.length;
 				receivedPackets++;
@@ -202,7 +205,7 @@ public class Server {
 			{
 				// -- Fill in the array with missing SNs
 				//if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue; // TODO This halves the throughput. Maybe we should send even more ACKs?
-				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, bnInBuffer);
+				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, windowLeft, windowRight);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
 					if (bn > windowRight || (lastBN != INVALID && bn > lastBN))
@@ -218,21 +221,24 @@ public class Server {
 				}
 				//else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
 
-				int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, bn);
-				if(blockAcked[bnIndexInBuffer]) continue;
+				// Index of this packet's block in the current window
+				int bnIndexInWindow = bn - windowLeft;
+				
+				// If the block was already acked, skip processing of this EOB packet
+				if (isBlockAcked[bnIndexInWindow]) continue;
+				
 				
 				// -- Assemble and send EOB_ACK
 
 				int numOfEobAckTx = 50;//missingSN.length / 50 + 3;
-				//Utils.logg("Sending ACK for BN=" + bn);
 				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
 				for (int k = 0; k < numOfEobAckTx; k++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 				
+				// This block has been received correctly!
 				if (missingSN.length == 0) {
-					// *This block has been received!*
 					Utils.logg("Received correctly BN=" + bn);
-					blockAcked[bnIndexInBuffer] = true;
+					isBlockAcked[bnIndexInWindow] = true;
 					if (bn == windowLeft)
 						canShift = true;
 				}
@@ -242,28 +248,25 @@ public class Server {
 				while (canShift) {
 					Utils.logg("windowLeft=" + windowLeft + "  -  now shifting by 1");
 					
-					// Before shifting we need to know how many bytes we must write. Full block? Or is this the last block? We get this info from the size of the buffer alone.
+					// Before shifting we need to know how many bytes we must write. Full block? Or is this the
+					// last block? We get this info from the size of the buffer alone.
 					
 					// Write on file the proper amount of bytes (the first block in the buffer)
 					int bytesInThisBlock = Math.min(BYTES_IN_BLOCK, bufferedBytes);
-					//if(bytesInThisBlock != BYTES_IN_BLOCK) Utils.logg("The buffer has only " + bufferedBytes + " bytes left: last block");
 					outStream.write(rxBuffer, 0, bytesInThisBlock);
-					
-					// Shift tx buffer
-					Utils.shiftArrayLeft(rxBuffer, BYTES_IN_BLOCK);
+					//if(bytesInThisBlock != BYTES_IN_BLOCK) Utils.logg("The buffer has only " + bufferedBytes + " bytes left: last block");
 
 					// Counters
 					bytesWritten += bytesInThisBlock;
 					bufferedBytes -= bytesInThisBlock;
 
-					// Shift and update other entities
-					Utils.shiftArrayLeft(blockAcked, 1);
-					Utils.shiftArrayLeft(bnInBuffer, 1);
-					bnInBuffer[bnInBuffer.length - 1] = ++windowRight;
+					// Shift the window, i.e. shift rx buffer and other entities that depend on the window itself
+					Utils.shiftArrayLeft(rxBuffer, BYTES_IN_BLOCK);
+					Utils.shiftArrayLeft(isBlockAcked, 1);
+					windowLeft++; windowRight++;
 					Utils.shiftArrayLeft(receivedPkts, PKTS_IN_BLOCK); // indices not corresponding to any packet are false, so we must pay attention and not consider them
-					windowLeft++;
 
-					// See whether this is the last block, and decide if we can shift again the window
+					// See whether this NEW block (AFTER the shifting) is the last one, and decide if we can shift again the window
 					int pktsInThisBlock = PKTS_IN_BLOCK;
 					if (windowLeft == lastBN) // we know which is the last BN, and it is now the first (and only one) in the buffer
 						pktsInThisBlock = (lastSN - 1) % PKTS_IN_BLOCK + 1;
@@ -272,7 +275,7 @@ public class Server {
 					if (windowLeft == lastBN + 1)
 						theEnd = true;
 				}
-
+				
 				break;
 			}
 
@@ -299,6 +302,7 @@ public class Server {
 		}
 
 
+		Utils.logg(receivedPackets + " received data packets");
 		double percentRetxOverhead = (double)duplicateCounter/receivedPackets * 100;
 		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + outOfWindowCounter + " data packets outside the window");
 		Utils.logg(receivedBytes + " bytes received\n" + bytesWritten + " bytes written on disk");
@@ -314,9 +318,12 @@ public class Server {
 
 
 	/**
-	 * @param bn
-	 * @param missingSN
-	 * @return
+	 * Assembles an End Of Block Acknowledgement packet for the specified Block Number, including the
+	 * list of the Sequence Numbers of missing data packets.
+	 * 
+	 * @param bn - the Block Number of the block that's being dealt with
+	 * @param missingSN - the array of SNs of missing data packets in the current block
+	 * @return the assembled UTP packet
 	 */
 	private static UTPpacket assembleEobAckPacket(int bn, int[] missingSN) {
 		
@@ -335,27 +342,33 @@ public class Server {
 
 
 	/**
-	 * @param receivedPkts
-	 * @param recvUTPpkt
-	 * @param bnInBuffer
-	 * @return
+	 * Given the current window, the register of received packets and the EOB packet just received, it returns the
+	 * array of Sequence Numbers of the packets that are missing from the block that this EOB packet advertises. 
+	 * 
+	 * @param receivedPkts - the boolean register of received packets for the whole window: this method only considers
+	 * the part of this array that concerns the block advertised by the EOB packet
+	 * @param eobPkt - the EOB packet that advertises the packets that the server should have received
+	 * @param windowLeft - the leftmost BN of the current window
+	 * @param windowRight - the rightmost BN of the current window
+	 * @return the array of Sequence Numbers of the packets that are missing from the block that this EOB packet advertises
 	 */
-	private static int[] getMissingSN(boolean[] receivedPkts, UTPpacket recvUTPpkt, int[] bnInBuffer) {
+	private static int[] getMissingSN(boolean[] receivedPkts, UTPpacket eobPkt, int windowLeft, int windowRight) {
 		
-		int[] missingSN;
-		int bnIndexInBuffer = Arrays.binarySearch(bnInBuffer, recvUTPpkt.endOfBlock.bn); // TODO fix all this part after implementing a real window
-		if (bnIndexInBuffer < 0) //FIXME
+		int bn = eobPkt.endOfBlock.bn;
+		if (bn < windowLeft || bn > windowRight)
 			return null;
-		missingSN = new int[PKTS_IN_BLOCK];
-		int firstSnOfThisBlock = PKTS_IN_BLOCK * (recvUTPpkt.endOfBlock.bn - 1) + 1;
+		
+		int bnIndexInBuffer = eobPkt.endOfBlock.bn - windowLeft;
+		int[] missingSN = new int[PKTS_IN_BLOCK];
+		int firstSnOfThisBlock = PKTS_IN_BLOCK * (eobPkt.endOfBlock.bn - 1) + 1;
 		
 		int missingSNindex = 0;
-		for (int i = 0; i < recvUTPpkt.endOfBlock.numberOfSentSN; i++) {
+		for (int i = 0; i < eobPkt.endOfBlock.numberOfSentSN; i++) {
 			if (! receivedPkts[i + bnIndexInBuffer * PKTS_IN_BLOCK])
 				missingSN[missingSNindex++] = i + firstSnOfThisBlock;
 		}
 		
-		return Arrays.copyOf(missingSN, missingSNindex); // Truncate;
+		return Arrays.copyOf(missingSN, missingSNindex); // Truncate
 	}
 
 
