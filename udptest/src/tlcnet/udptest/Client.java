@@ -254,44 +254,48 @@ public class Client
 			}
 			
 			// ---- Receive ack ----
-			
-			byte[] recvBuf = new byte[RX_BUFSIZE];
-			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-			socket.setSoTimeout(ACK_TIMEOUT);
-			try{
-				socket.receive(recvPkt);
-			}
-			catch (SocketTimeoutException e) {
-				System.out.println("timeout for ack n. " + segmentCounter + " expired: resending");
-				ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//Ack is a string of zeros: nothing was actually acked
-				continue; 										//Restarts from the main cycle
-			}
-			catch(IOException e) {
-				System.err.println("I/O error while receiving ack packet:\n" + e);
-				socket.close(); System.exit(-1);
-			}
-			
-			// ---- Process received ack: put it in binary string form ----
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
-			UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
-			if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA)	{
-				ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class 
-				//Debug
-				System.out.println("ACK n. " + segmentCounter + ": " + ack);			
-				
-				//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
-				//(no more data). I realized that, since we send old nacked packets BEFORE sliding the window, when we send them 
-				//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
-				//ack, fixing it.
-				
-				if(lastSn != 0 && lastSnInWindow != lastSn)	{
-					int digits = (lastSnInWindow - lastSn);
-					String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
-					ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+			boolean wrongAck = true;
+			while(wrongAck)	{
+				byte[] recvBuf = new byte[RX_BUFSIZE];
+				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
+				socket.setSoTimeout(ACK_TIMEOUT);
+				try{
+					socket.receive(recvPkt);
 				}
-				if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)	{		//It means that everything was acked
-					mustSend = false;
-					System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
+				catch (SocketTimeoutException e) {
+					System.out.println("timeout for ack n. " + segmentCounter + " expired: resending");
+					ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//Ack is a string of zeros: nothing was actually acked
+					wrongAck = false;
+					continue; 										//Restarts from the main cycle
+				}
+				catch(IOException e) {
+					System.err.println("I/O error while receiving ack packet:\n" + e);
+					socket.close(); System.exit(-1);
+				}
+				
+				// ---- Process received ack: put it in binary string form ----
+				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
+				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
+				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
+					ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class 
+					//Debug
+					System.out.println("ACK n. " + segmentCounter + ": " + ack);			
+					
+					//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
+					//(no more data). I realized that, since we send old nacked packets BEFORE sliding the window, when we send them 
+					//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
+					//ack, fixing it.
+					
+					if(lastSn != 0 && lastSnInWindow != lastSn)	{
+						int digits = (lastSnInWindow - lastSn);
+						String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
+						ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+					}
+					if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)	{		//It means that everything was acked
+						mustSend = false;
+						System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
+					}
+					wrongAck = false;
 				}
 			}
 		}
