@@ -1,5 +1,7 @@
 package tlcnet.udptest;
 
+import java.nio.ByteBuffer;
+
 public class Utils {
 
 	public static int[] byteArr2intArr(byte[] in) {
@@ -21,5 +23,9 @@ public class Utils {
 	public static String AckToBinaryString(int number, int window_size)	{
 		String b = Integer.toBinaryString((number & 0xffffffff) + 0x80000000).substring(32 - window_size);
 		return b;
+	}
+	
+	public static short bytes2short(byte[] bytes) {
+	     return ByteBuffer.wrap(bytes).getShort();
 	}
 }

@@ -12,11 +12,9 @@ import java.util.concurrent.TimeUnit;
 
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
-	private static final int CORE_POOL_SIZE = 50; // TODO: check this
+	private static final int CORE_POOL_SIZE = 1000;
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
-	
-	
 	
 	
 	public static void main(String[] args) {
@@ -24,107 +22,94 @@ public class Channel {
 		int listenPort = DEF_CHANNEL_RCV_PORT;
 		
 		// --- Create listen and send sockets ---
-		
 		DatagramSocket listenSocket = null;
 		DatagramSocket outSocket = null;
 		try {
 			listenSocket = new DatagramSocket(listenPort);
-		}
-		catch(SocketException e) {
+		} catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
 		}
 		try {
 			outSocket = new DatagramSocket(); // any available local port
-		}
-		catch (SocketException e) {
+		} catch (SocketException e) {
 			System.err.println("Error creating a datagram socket:\n" + e);
 			listenSocket.close(); System.exit(-1);
 		}
 
-		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE); //TODO Check if threads close. Should this be inside the loop?
+		// Create object for async packet forwarding
+		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
+		
+		// Create object for UDP parsing in order to get the destination port and address
+		ChannelGenericPacketParser pktParser = new ChannelGenericPacketParser();
 
 		
-		// * * * *  MAIN LOOP  * * * *
+		
+		// * * *  MAIN LOOP  * * *
 		
 		while(true) {
 			
-			
-			// ---- Receive packet ----
+			// Receive packet
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-			try{
+			try {
 				listenSocket.receive(recvPkt);
-			}
-			catch(IOException e) {
+			} catch(IOException e) {
 				System.err.println("I/O error while receiving datagram:\n" + e);
 				listenSocket.close(); outSocket.close(); System.exit(-1);
 			}
 			
+			// Payload of received UDP datagram: this is also the payload of the outbound packet.
+			byte[] udpPayload = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength());
 			
-			// ---- Process received packet and prepare new packet ----
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // payload of recv UDP datagram
-			UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
+			// Parse the payload and get destination address and port
+			pktParser.setPayload(udpPayload);
+			InetAddress dstAddr = pktParser.getDstAddr();
+			int dstPort = pktParser.getDstPort();
+			
+			// The following is compatible only with our format.
+			/*UTPpacket utpPkt = new UTPpacket(udpPayload);		// parse UDP payload
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
-			int dstPort = (int)utpPkt.dstPort & 0xffff;
-			byte[] sendData = recvData; // useless but clear
-			
-			//DEBUG
-			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			if (utpPkt.function == UTPpacket.FUNCT_ACKDATA)
-				System.out.println("ACK " + utpPkt.sn);
-			else
-				System.out.println("SN=" + utpPkt.sn + "\nPayload length = " + utpPkt.payl.length);
-
+			int dstPort = (int)utpPkt.dstPort & 0xffff;*/
 			
 			
-			// ---- Send packet ----
-			
-			if (mustDrop(utpPkt.payl.length)) {
-				System.out.println("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+			// Decide whether to drop the packet; if so, start listening again.
+			if (mustDrop(udpPayload.length)) {
+				//Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
 				continue;
 			}
-			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, dstAddr, dstPort);
+			
+			// Create the UDP datagram to be sent
+			DatagramPacket sendPkt = new DatagramPacket(udpPayload, udpPayload.length, dstAddr, dstPort);
+
 			// Execute thread that sends packet after a random time
-			long rndDelay = getRndDelay(sendData.length);
-			System.out.println("Delay=" + rndDelay + " ms");
-			schedExec.schedule(new SendDelayedPacket(outSocket, listenSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
-
-		}
-
-		
-	}
-
-	
-	private static class SendDelayedPacket implements Runnable
-	{
-		private DatagramSocket dstSock;
-		private DatagramSocket srcSock;
-		private DatagramPacket sendPkt;
-
-		public SendDelayedPacket(DatagramSocket dstSock, DatagramSocket srcSock, DatagramPacket sendPkt) {
-			super();
-			this.dstSock = dstSock;
-			this.srcSock = srcSock;
-			this.sendPkt = sendPkt;
-		}
-
-
-		@Override
-		public void run() {
-
-			try {
-				dstSock.send(sendPkt);
-			}
-			catch(IOException e) {
-				System.err.println("I/O error while sending datagram:\n" + e);
-				dstSock.close(); srcSock.close(); System.exit(-1);
-			}
+			long rndDelay = getRndDelay(udpPayload.length);
+			schedExec.schedule(new AsyncRepeatedPacketSender(outSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
+			
+			// AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
+			// was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
+			// the packet itself, together with the output socket.
+			
+			
+			//DEBUG
+//			if (dstPort == Client.DEF_CLIENT_PORT)
+//				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
+//			else if (dstPort == Server.DEF_SERVER_PORT)
+//				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
 		}
 	}
 
+
 	
 
+	
+	/**
+	 * Computes whether the channel should drop the current packet or forward it, based
+	 * on the packet drop probability, which depends on the length of the UDP payload.
+	 * 
+	 * @param length - the length of the UTP packet (i.e. of the UDP payload)
+	 * @return true if the current packet must be dropped, false if it must be forwarded to its destination
+	 */
 	private static boolean mustDrop(int length) {
 		double discard_prob = 1 - Math.exp(-length/(double)1024);
 		boolean discard = new Random().nextDouble() <= discard_prob;
@@ -133,12 +118,17 @@ public class Channel {
 
 	
 
+	
+	/**
+	 * Returns the random delay that the current packet must experience. The delay follows an exponential
+	 * distribution and depends on the length of the UDP payload.
+	 * 
+	 * @param length - the length of the UTP packet (i.e. of the UDP payload)
+	 * @return a random delay for the current packet 
+	 */
 	private static long getRndDelay(int length) {
 		double mean = 1024/Math.log((double) length);
 		double delay = -Math.log(new Random().nextDouble()) * mean;
 		return Math.round(delay);
 	}
-	
-	
-
 }
