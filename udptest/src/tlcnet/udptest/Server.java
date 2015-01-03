@@ -17,7 +17,7 @@ public class Server {
 
 	static final int DEF_CHANNEL_PORT = 65432;
 	static final int DEF_SERVER_PORT = 65433;
-	private static final short END_TIMEOUT = 20000;		//To stop waiting for pcks
+	private static final int END_TIMEOUT = 40000;		//To stop waiting for pcks
 	private static final int RX_PKT_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
 	private static final int INVALID = -1;
@@ -38,7 +38,7 @@ public class Server {
 	private static InetAddress clientAddr = null;
 	
 	static int eobSn = 1;
-	//private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
+	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 
 
 
@@ -204,7 +204,7 @@ public class Server {
 			case UTPpacket.FUNCT_EOB:
 			{
 				// -- Fill in the array with missing SNs
-				//if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue; // TODO This halves the throughput. Maybe we should send even more ACKs?
+				if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue; // TODO This seems to half the throughput. Maybe we should send even more ACKs instead?
 				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, windowLeft, windowRight);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
@@ -219,7 +219,7 @@ public class Server {
 						break;
 					}
 				}
-				//else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
+				else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
 
 				// Index of this packet's block in the current window
 				int bnIndexInWindow = bn - windowLeft;
@@ -302,7 +302,7 @@ public class Server {
 		}
 
 
-		Utils.logg(receivedPackets + " received data packets");
+		Utils.logg(receivedPackets + " packets in the file, while " + (receivedPackets + duplicateCounter) + " data packets were received");
 		double percentRetxOverhead = (double)duplicateCounter/receivedPackets * 100;
 		Utils.logg(duplicateCounter + " duplicate data packets (" + new DecimalFormat("#0.00").format(percentRetxOverhead) + "% overhead)\n" + outOfWindowCounter + " data packets outside the window");
 		Utils.logg(receivedBytes + " bytes received\n" + bytesWritten + " bytes written on disk");

@@ -21,14 +21,14 @@ import java.util.concurrent.TimeUnit;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 5000;
+	private static final short ACK_TIMEOUT = 4000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	
 	private static final int CORE_POOL_SIZE = 1000;
 	private static final int EOB_PRE_SLEEP = 1;
 	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 40;
+	private static final int EOB_INTER_DELAY = 20;
 	
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 1200;
@@ -42,13 +42,16 @@ public class Client
 	
 	private static int sentDataPkts = 0;
 	private static int sentEobPkts = 0;
-	private static int numDataPkt = 0;
 	private static int eobSn = 1;
 	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
-	
 	private static boolean[] pendingEobAck;
 	private static DatagramPacket[] eobCache = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
+	private static int eob_preSleep = EOB_PRE_SLEEP;
+	
+	/*private static int spaceOutFactor = 1;
+	private static final int SPACE_OUT_DELAY = 50;*/
+	
 
 	// FIXME If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
@@ -75,22 +78,20 @@ public class Client
 
 
 
+		RandomAccessFile theFile = null;
 		try {
 			dstAddr = InetAddress.getByName(args[0]);
 			channelAddr = InetAddress.getByName(args[1]);
+			String fileName = args[2];
+			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader
 		} catch (UnknownHostException e) {
 			System.err.println(e);
 			socket.close();	return;
-		}
-
-		RandomAccessFile theFile = null;
-		try	{
-			String fileName = args[2];
-			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader
 		} catch(FileNotFoundException e)	{
 			System.err.println("Error: file not found");
 			socket.close();	return;
 		}
+
 		FileInputStream inStream = new FileInputStream(theFile.getFD());
 
 
@@ -110,7 +111,7 @@ public class Client
 		// Start stopwatch
 		long startTransferTime = System.currentTimeMillis();
 
-		int totBytesRead = 0;	// Counter 
+		int totBytesRead = 0;	// Counter
 		
 		int windowLeft = 1;
 		//int windowRight = BLOCKS_IN_BUFFER;
@@ -139,6 +140,11 @@ public class Client
 
 		// Compute number of packets in the buffer
 		int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
+		
+		double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
+		double lossThresh = 0.4 * 1 + 0.6 * expectedLossProb;
+		Utils.logg("Expected loss probability is " + Math.round(expectedLossProb * 100) + "%");
+		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%");
 
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
@@ -158,20 +164,24 @@ public class Client
 		while(!theEnd) {
 
 			if (System.currentTimeMillis() > timerStart + timeout) { //timeout since last sent EOB expired
-				theEnd = true;
+				int pendingEobAcks = 0;
 				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 						int times=3;
 						for (int k = 0; k < times; k++)
-							sendDatagram(socket, eobCache[j]);
+							sendDatagram(socket, eobCache[j]); // TODO CHANGE THE SN
 						sentEobPkts += times;
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
-						theEnd = false;
+						pendingEobAcks++;
 					}
-				if (theEnd) { // is this block useful at the end of transmission? Isn't the FIN packet enough?
+				if (pendingEobAcks == 0) { // is this block useful at the end of transmission? Isn't the FIN packet enough?
 					System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
+					theEnd = true;
 					break;
+				}
+				if (pendingEobAcks > BLOCKS_IN_BUFFER / 2) {
+					timeout *= 2;
 				}
 			}
 
@@ -215,6 +225,8 @@ public class Client
 			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 			int ackedBn = recvEobAck.endOfBlockAck.bn;
+			if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
+				eob_preSleep *= 2;
 			
 			// Index of this packet's block in the current window
 			int bnIndexInWindow = ackedBn - windowLeft;
@@ -251,7 +263,7 @@ public class Client
 				bufferedBytes -= BYTES_IN_BLOCK;
 				bufferedBytes += bytesRead;
 				int newPkts = Math.min(PKTS_IN_BLOCK, bytesRead / PKT_SIZE + 1);
-				Utils.logg("Read " + bytesRead + " more bytes from file");
+				if(bytesRead > 0) Utils.logg("Read " + bytesRead + " more bytes from file");
 
 				// Shift and update other entities
 				Utils.shiftArrayLeft(pendingEobAck, 1);
@@ -266,17 +278,19 @@ public class Client
 			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
 		}
 
+		int numDataPkts = totBytesRead / PKT_SIZE + 1;
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
 		double transferRate = totBytesRead / 1024 / elapsedTime;
 		System.out.println("File transfer complete! :(");
 		System.out.println(totBytesRead + " bytes read");
-		System.out.println("The file was split in " + numDataPkt + " packets, while " + sentDataPkts + " data packets were actually sent");
+		System.out.println(numDataPkts + " data packets to be sent, while " + sentDataPkts + " data packets were actually sent");
 		System.out.println(sentEobPkts + " EOB packets were sent");
 		System.out.println((sentDataPkts + sentEobPkts) + " total packets sent to channel");
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
 		
-		Utils.logg(dupEobHandler.misses());
+		Utils.logg("Now eob_preSleep is " + eob_preSleep + " ms");
+		Utils.logg("duplicate EOB handler misses = " + dupEobHandler.misses());
 		schedExec.shutdownNow();
 	}
 
@@ -386,10 +400,8 @@ public class Client
 			eobCache[i] = eobPkt;
 			
 			try {
-				Thread.sleep(EOB_PRE_SLEEP);
-			} catch (InterruptedException e) {
-				//e.printStackTrace();
-			}
+				Thread.sleep(eob_preSleep);
+			} catch (InterruptedException e) {}
 			int TEMPTIMES = 6; // FIXME
 			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, TEMPTIMES, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
 			pendingEobAck[i] = true;
@@ -446,6 +458,11 @@ public class Client
 		// Note that this loop may exceed the actual number of packets in this block, hence those dummy
 		// packets must always be flagged as "not to be sent".
 		for (int pktInd = 0; pktInd < PKTS_IN_BLOCK; pktInd++) {
+			
+			/*if (spaceOutFactor > 1 && pktInd == Math.round((double)PKTS_IN_BLOCK / spaceOutFactor))
+				try {
+					Thread.sleep(SPACE_OUT_DELAY);
+				} catch (InterruptedException e) {}*/
 
 			// If this packet was already received, there's no need to send it again
 			if (! toBeSent[pktInd])

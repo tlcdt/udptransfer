@@ -68,7 +68,7 @@ public class Channel {
 			int dstPort = pktParser.getDstPort();
 			
 			// The following is compatible only with our format.
-			/*UTPpacket utpPkt = new UTPpacket(recvData);		// parse UDP payload
+			/*UTPpacket utpPkt = new UTPpacket(udpPayload);		// parse UDP payload
 			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
 			int dstPort = (int)utpPkt.dstPort & 0xffff;*/
 			
@@ -93,9 +93,9 @@ public class Channel {
 			
 			//DEBUG
 //			if (dstPort == Client.DEF_CLIENT_PORT)
-//				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
+//				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
 //			else if (dstPort == Server.DEF_SERVER_PORT)
-//				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH + 12)));
+//				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
 		}
 	}
 
