@@ -5,6 +5,7 @@ import java.util.Arrays;
 public class DuplicateIdHandler {
 	private static final int WNDSIZE = 40000;
 	private static final int WNDSHIFT= 4000;
+	public static final int JOLLY = 0;
 	
 	//private int wndSize;
 	private int wndShift;
@@ -60,6 +61,9 @@ public class DuplicateIdHandler {
 
 
 	public boolean isNew(int id) {
+		if(id == JOLLY)
+			return true; // without setting it!
+		
 		if(id < left) {
 			misses++;
 			return true; // we forgot... assume it's new

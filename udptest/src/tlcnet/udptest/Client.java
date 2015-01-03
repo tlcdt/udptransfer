@@ -323,13 +323,13 @@ public class Client
 	 * @param numPacketsInThisBlock
 	 * @return
 	 */
-	private static DatagramPacket assembleEobDatagram(InetAddress channelAddr,
-			InetAddress dstAddr, int bn, int numPacketsInThisBlock) {
-		
-		// -- Initialize variables for ENDOFBLOCK packet --
+	private static DatagramPacket assembleEobDatagram(InetAddress channelAddr, InetAddress dstAddr, int bn, int numPacketsInThisBlock, boolean useSequenceNumber) {
 
 		UTPpacket eobUtpPkt = new UTPpacket();
-		eobUtpPkt.sn = eobSn++;
+		if (useSequenceNumber)
+			eobUtpPkt.sn = eobSn++;
+		else
+			eobUtpPkt.sn = DuplicateIdHandler.JOLLY;
 		eobUtpPkt.dstAddr = dstAddr;
 		eobUtpPkt.dstPort = (short)dstPort;
 		eobUtpPkt.function = UTPpacket.FUNCT_EOB;
@@ -337,6 +337,20 @@ public class Client
 		byte[] eobData = eobUtpPkt.getRawData();
 		DatagramPacket eobDatagram = new DatagramPacket(eobData, eobData.length, channelAddr, channelPort);
 		return eobDatagram;
+	}
+	
+	
+	
+	/**
+	 * @param channelAddr
+	 * @param dstAddr
+	 * @param bn
+	 * @param numPacketsInThisBlock
+	 * @return
+	 */
+	private static DatagramPacket assembleEobDatagram(InetAddress channelAddr, InetAddress dstAddr, int bn, int numPacketsInThisBlock) {
+
+		return assembleEobDatagram(channelAddr, dstAddr, bn, numPacketsInThisBlock, true);
 	}
 
 	
@@ -397,7 +411,7 @@ public class Client
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
 
 			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInWindow(i, windowLeft), numPktsInThisBlock);
-			eobCache[i] = eobPkt;
+			eobCache[i] = assembleEobDatagram(channelAddr, dstAddr, bnInWindow(i, windowLeft), numPktsInThisBlock, false);
 			
 			try {
 				Thread.sleep(eob_preSleep);
