@@ -42,7 +42,6 @@ public class Client
 	
 	private static int sentDataPkts = 0;
 	private static int sentEobPkts = 0;
-	private static EobAssembler eobAssembler;
 	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	private static boolean[] pendingEobAck;
@@ -56,18 +55,20 @@ public class Client
 
 	
 	
+	
 	public static void main(String args[]) throws IOException
 	{
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
 
+		// Input arguments check
 		if (args.length != 3) {
 			System.out.println("Usage: java Client <dest address> <channel address> <local file>"); 
 			return;
 		}
 
-		// ---- Create socket ----
+		// Create socket
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
 		} catch (SocketException e) {
@@ -75,57 +76,39 @@ public class Client
 			return;
 		}
 
-
-
+		// Parse input and create a handle to the file
 		RandomAccessFile theFile = null;
 		try {
 			dstAddr = InetAddress.getByName(args[0]);
 			channelAddr = InetAddress.getByName(args[1]);
 			String fileName = args[2];
-			theFile = new RandomAccessFile(fileName, "r");	//creating a file reader
-		} catch (UnknownHostException e) {
+			theFile = new RandomAccessFile(fileName, "r");
+		} catch (UnknownHostException | FileNotFoundException e) {
 			System.err.println(e);
 			socket.close();	return;
-		} catch(FileNotFoundException e)	{
-			System.err.println("Error: file not found");
-			socket.close();	return;
 		}
-
+		// Input stream to read from the file
 		FileInputStream inStream = new FileInputStream(theFile.getFD());
 
-
-
-
-
-
-
-
-
-
-		// * * * * * * * * * * * * * *//
-		// * *  DATA TRANSFER LOOP * *//
-		// * * * * * * * * * * * * * *//
-
-
-
-		int totBytesRead = 0;	// Counter
-		
+		// Initialize left border of the sliding window
 		int windowLeft = 1;
-		//int windowRight = BLOCKS_IN_BUFFER;
 		
-		//
-		boolean[] toBeSent = new boolean[PKTS_IN_BUFFER];
-		
-		pendingEobAck = new boolean[BLOCKS_IN_BUFFER];
+		// Flags
+		boolean[] toBeSent = new boolean[PKTS_IN_BUFFER];	// tells which packets in the window must be sent
 		boolean[] isBlockAcked = new boolean[BLOCKS_IN_BUFFER];
+		pendingEobAck = new boolean[BLOCKS_IN_BUFFER];
 		
+		// Flag to stop execution: it signals the end of transmission
 		boolean theEnd = false;
 		
-		// Bytes of useful data in the tx buffer
-		int bufferedBytes = 0;
+		// Counters
+		int bufferedBytes = 0;	// Bytes of useful data in the tx buffer
+		int totBytesRead = 0;	// Bytes read from file during the whole execution
 		
-		eobAssembler = new EobAssembler(BLOCKS_IN_BUFFER, channelAddr, channelPort, dstAddr, dstPort);
+		// This is for generating EOB packets and handling EOB sequence numbers
+		EobAssembler eobAssembler = new EobAssembler(BLOCKS_IN_BUFFER, channelAddr, channelPort, dstAddr, dstPort);
 
+		// This object allows to send packets asynchronously with a specified delay. It's used for congestion control purposes only.
 		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
 
 		// Start stopwatch
@@ -133,7 +116,24 @@ public class Client
 		
 		// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 		byte[] txBuffer = new byte[BUFFER_SIZE];
+		
+		// A priori statistics
+		double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
+		double lossThresh = 0.4 * 1 + 0.6 * expectedLossProb;
+		Utils.logg("Expected loss probability is " + Math.round(expectedLossProb * 100) + "%");
+		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%\n");
+		
+		
+		
+		
+		
+		
+		// * * * * * * * * * * * *//
+		// * *  DATA TRANSFER  * *//
+		// * * * * * * * * * * * *//
 
+
+		// Read first chunk from file
 		int bytesRead = inStream.read(txBuffer, 0, txBuffer.length);
 
 		// Update total byte counter
@@ -142,18 +142,13 @@ public class Client
 
 		// Compute number of packets in the buffer
 		int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
-		
-		double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
-		double lossThresh = 0.4 * 1 + 0.6 * expectedLossProb;
-		Utils.logg("Expected loss probability is " + Math.round(expectedLossProb * 100) + "%");
-		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%\n\n");
 
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
 
 		// 
 		try {
-			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
 			// toBeSent is now all-false
 		} catch (IOException e) {
 			System.err.println("I/O error while sending data");
@@ -272,12 +267,11 @@ public class Client
 				eobAssembler.shiftWindow();
 				Utils.shiftArrayLeft(isBlockAcked, 1);
 				windowLeft++;
-				//windowRight++;
 				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
 				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
-			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
 		}
 
 		int numDataPkts = totBytesRead / PKT_SIZE + 1;
@@ -333,11 +327,13 @@ public class Client
 	 * @param socket - the socket on which send and receive operations are performed
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
+	 * @param eobAssembler
+	 * @param schedExec
 	 * @throws IOException if an I/O error occurs in the socket while sending the datagram
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
-			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, ScheduledThreadPoolExecutor schedExec) throws IOException {
-		
+			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, ScheduledThreadPoolExecutor schedExec) throws IOException {
+
 		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;	
 		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK; // FIXME check bufferedbytes > 0 (or at least non-negative!)
@@ -361,7 +357,7 @@ public class Client
 			
 			boolean[] toBeSent_thisBlock = new boolean[PKTS_IN_BLOCK];
 //			Utils.logg(numPktsInThisBlock + " pkts in block " + bnInBuffer[i]);
-			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock); // numPktsInThisBlock can be substituted by PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end
+			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock); // numPktsInThisBlock is the same as PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end
 			
 			int numPktsToSend = Utils.count(toBeSent_thisBlock, true);
 			if (numPktsToSend == 0)
