@@ -94,11 +94,12 @@ public class Server {
 		boolean allFalse = false;
 		int firstFalse = 0;
 		
+		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
 		{
 			
-						//SN != lastSnWind
+					
 			
 			boolean WINFIN = false;	//Needed to stop the cycle
 			while(!WINFIN && (System.currentTimeMillis() - startTransferTime) < (long)WINDOW_TIMEOUT)	{
@@ -134,7 +135,7 @@ public class Server {
 			if(new_window)	{
 				
 				window_size = recvUTPpkt.lastSnInWindow - lastSnWind; //get the current window size
-				firstSnWind = lastSnWind + 1;							
+				firstSnWind = lastSnWind + 1;						
 				lastSnWind = recvUTPpkt.lastSnInWindow;
 				startTransferTime = System.currentTimeMillis();			//start the timer
 				DataBuffer = new byte [window_size][BLOCK_SIZE];
@@ -147,7 +148,7 @@ public class Server {
 			
 			else if(notAllAcked){
 					
-				window_size = recvUTPpkt.lastSnInWindow - (lastSnWind + firstFalse - 1); //get the current window size
+				window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
 				firstSnWind = firstFalse;							
 				lastSnWind = recvUTPpkt.lastSnInWindow;
 				startTransferTime = System.currentTimeMillis();			//start the timer
@@ -158,8 +159,9 @@ public class Server {
 			
 			}
 			
-				
-				
+			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN)	{		//received the FIN packet
+				gotFIN = true;
+			}
 				
 				
 				//-------for every packet of the window---------
@@ -171,7 +173,9 @@ public class Server {
 				//copy data in the cell of the buffer array with the right index
 				System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
 				
-				Ack = new boolean[window_size];
+				System.out.println("Received data:" + recvUTPpkt.payl);
+				
+				
 				//put the 1 in the Ack array in the right position
 				Ack[recvUTPpkt.sn - firstSnWind] = true;
 			
@@ -194,6 +198,12 @@ public class Server {
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 			sendUTPpkt.lastSnInWindow = lastSnWind;
 			sendUTPpkt.payl = new byte[0];
+			if(gotFIN)		
+				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
+			else
+				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
+			
+			System.out.println("Ack array: " + sendUTPpkt.sn );
 			
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram (UTP packet)
 
@@ -238,7 +248,7 @@ public class Server {
 	
 	
 				// If the buffer is too large, write it on file (append) and empty it.
-				if (writeBuffer.size() > WRITEBUF_THRESH) {
+				if (writeBuffer.size() > WRITEBUF_THRESH) {				//Is useful?
 					writeBufferToFile(writeBuffer, fileOutputStream);
 				}
 
