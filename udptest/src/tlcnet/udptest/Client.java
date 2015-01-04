@@ -132,7 +132,7 @@ public class Client
 							offset = i;					
 						}
 						lastSnInWindow = sn - 1 + offset;
-						System.out.println("Last sn in window è " + lastSnInWindow + "e i è uguale a " + i + "e pcksInFirst è " + pcksInFirst);
+						System.out.println("/n--DEBUG--/nLast sn in window è " + lastSnInWindow + " e i è uguale a " + i + " e pcksInFirst è " + pcksInFirst);
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
 							int pck_size = BLOCK_SIZE;
@@ -275,7 +275,6 @@ public class Client
 				}
 				catch (SocketTimeoutException e) {
 					System.out.println("\n------\nTimeout for ack n. " + segmentCounter + " expired: resending...");
-					ack = Utils.AckToBinaryString(0, WINDOW_SIZE);
 					resending = true;
 					wrongAck = false;
 					continue; 										//Restarts from the main cycle
