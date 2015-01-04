@@ -42,11 +42,10 @@ public class Client
 	
 	private static int sentDataPkts = 0;
 	private static int sentEobPkts = 0;
-	private static int eobSn = 1;
+	private static EobAssembler eobAssembler;
 	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	private static boolean[] pendingEobAck;
-	private static DatagramPacket[] eobCache = new DatagramPacket[BLOCKS_IN_BUFFER]; //bleah
 	private static int eob_preSleep = EOB_PRE_SLEEP;
 	
 	/*private static int spaceOutFactor = 1;
@@ -108,8 +107,6 @@ public class Client
 		// * * * * * * * * * * * * * *//
 
 
-		// Start stopwatch
-		long startTransferTime = System.currentTimeMillis();
 
 		int totBytesRead = 0;	// Counter
 		
@@ -126,9 +123,14 @@ public class Client
 		
 		// Bytes of useful data in the tx buffer
 		int bufferedBytes = 0;
+		
+		eobAssembler = new EobAssembler(BLOCKS_IN_BUFFER, channelAddr, channelPort, dstAddr, dstPort);
 
 		ScheduledThreadPoolExecutor schedExec = new ScheduledThreadPoolExecutor(CORE_POOL_SIZE);
 
+		// Start stopwatch
+		long startTransferTime = System.currentTimeMillis();
+		
 		// Transmission buffer: its size is the size of the block in bytes (we'll have zero padding at the end of the file transfer)
 		byte[] txBuffer = new byte[BUFFER_SIZE];
 
@@ -144,7 +146,7 @@ public class Client
 		double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
 		double lossThresh = 0.4 * 1 + 0.6 * expectedLossProb;
 		Utils.logg("Expected loss probability is " + Math.round(expectedLossProb * 100) + "%");
-		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%");
+		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%\n\n");
 
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
@@ -170,7 +172,7 @@ public class Client
 						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 						int times=3;
 						for (int k = 0; k < times; k++)
-							sendDatagram(socket, eobCache[j]); // TODO CHANGE THE SN
+							sendDatagram(socket, eobAssembler.getFromCache(j));
 						sentEobPkts += times;
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						pendingEobAcks++;
@@ -267,7 +269,7 @@ public class Client
 
 				// Shift and update other entities
 				Utils.shiftArrayLeft(pendingEobAck, 1);
-				Utils.shiftArrayLeft(eobCache, 1);
+				eobAssembler.shiftWindow();
 				Utils.shiftArrayLeft(isBlockAcked, 1);
 				windowLeft++;
 				//windowRight++;
@@ -281,7 +283,7 @@ public class Client
 		int numDataPkts = totBytesRead / PKT_SIZE + 1;
 		double elapsedTime = (double) (System.currentTimeMillis() - startTransferTime)/1000;
 		double transferRate = totBytesRead / 1024 / elapsedTime;
-		System.out.println("File transfer complete! :(");
+		System.out.println("\nFile transfer complete! :(");
 		System.out.println(totBytesRead + " bytes read");
 		System.out.println(numDataPkts + " data packets to be sent, while " + sentDataPkts + " data packets were actually sent");
 		System.out.println(sentEobPkts + " EOB packets were sent");
@@ -302,8 +304,8 @@ public class Client
 	 * Returns the Block Number of the block that is at the specified index in the current window.
 	 * Returns 0 if the index is invalid.
 	 * 
-	 * @param index
-	 * @param windowLeft
+	 * @param - index
+	 * @param - windowLeft
 	 * @return - the Block Number of the block that is at the specified index in the current window.<br>
 	 * - the value 0 if the index is invalid.
 	 */
@@ -314,46 +316,6 @@ public class Client
 	}
 
 
-
-
-	/**
-	 * @param channelAddr
-	 * @param dstAddr
-	 * @param bn
-	 * @param numPacketsInThisBlock
-	 * @return
-	 */
-	private static DatagramPacket assembleEobDatagram(InetAddress channelAddr, InetAddress dstAddr, int bn, int numPacketsInThisBlock, boolean useSequenceNumber) {
-
-		UTPpacket eobUtpPkt = new UTPpacket();
-		if (useSequenceNumber)
-			eobUtpPkt.sn = eobSn++;
-		else
-			eobUtpPkt.sn = DuplicateIdHandler.JOLLY;
-		eobUtpPkt.dstAddr = dstAddr;
-		eobUtpPkt.dstPort = (short)dstPort;
-		eobUtpPkt.function = UTPpacket.FUNCT_EOB;
-		eobUtpPkt.setEndOfBlock(bn, numPacketsInThisBlock);
-		byte[] eobData = eobUtpPkt.getRawData();
-		DatagramPacket eobDatagram = new DatagramPacket(eobData, eobData.length, channelAddr, channelPort);
-		return eobDatagram;
-	}
-	
-	
-	
-	/**
-	 * @param channelAddr
-	 * @param dstAddr
-	 * @param bn
-	 * @param numPacketsInThisBlock
-	 * @return
-	 */
-	private static DatagramPacket assembleEobDatagram(InetAddress channelAddr, InetAddress dstAddr, int bn, int numPacketsInThisBlock) {
-
-		return assembleEobDatagram(channelAddr, dstAddr, bn, numPacketsInThisBlock, true);
-	}
-
-	
 	
 	
 	
@@ -410,8 +372,7 @@ public class Client
 			for (int j = 0; j < numTxForCurrBlock; j++)
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
 
-			DatagramPacket eobPkt = assembleEobDatagram(channelAddr, dstAddr, bnInWindow(i, windowLeft), numPktsInThisBlock);
-			eobCache[i] = assembleEobDatagram(channelAddr, dstAddr, bnInWindow(i, windowLeft), numPktsInThisBlock, false);
+			DatagramPacket eobPkt = eobAssembler.assembleEobDatagram(bnInWindow(i, windowLeft), numPktsInThisBlock);
 			
 			try {
 				Thread.sleep(eob_preSleep);
@@ -433,7 +394,6 @@ public class Client
 	
 	
 	
-	
 	private static int getNumTransmissions(int numPktsToSend) {
 		if (numTransmissionsCache[numPktsToSend-1] == 0)
 			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.2)));
@@ -442,19 +402,12 @@ public class Client
 
 
 
-
-
-
-
-
-
+	
 
 	/**
 	 * @param txBuffer
 	 * @param toBeSent
-	 * @param bnInBuffer - Block Numbers of the blocks we are trying to send.
-	 * @param bufferedBytes - the actual number of bytes in the buffer. It is generally fixed, but it can be
-	 * any number between 0 and BUFFER_SIZE if there is the last block of the file transfer operation.
+	 * @param bn
 	 * @param socket - the socket on which send and receive operations are performed
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
@@ -496,8 +449,6 @@ public class Client
 			// Payload of the current UDP packet. It's taken from the tx buffer.
 			byte[] currPkt = Arrays.copyOfRange(txBuffer, currPktStart, currPktEnd);
 
-			//Utils.logg(" == Pkt " + (snOffset + pktInd) + ": " + new String(currPkt).substring(0, 12));
-
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.sn = snOffset + pktInd;
 			sendUTPpkt.dstAddr = dstAddr;
@@ -527,13 +478,12 @@ public class Client
 
 
 	/**
-	 * @param socket
-	 * @param sndPkt
+	 * @param socket - the socket on which the packet must be sent
+	 * @param outPkt - the outbound packet
 	 */
-	private static void sendDatagram(DatagramSocket socket,
-			DatagramPacket sndPkt) {
+	private static void sendDatagram(DatagramSocket socket, DatagramPacket outPkt) {
 		try {
-			socket.send(sndPkt);
+			socket.send(outPkt);
 		} catch(IOException e) {
 			System.err.println("I/O error while sending datagram");
 			socket.close(); System.exit(-1);;
