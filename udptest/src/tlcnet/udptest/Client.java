@@ -9,7 +9,7 @@ import java.nio.channels.FileChannel;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 2000;
+	private static final int ACK_TIMEOUT = 6000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
@@ -76,7 +76,7 @@ public class Client
 		int begin = 0;	//begin always refears to array "first"; end is the index of the last byte of the window
 		int end = (WINDOW_SIZE - 1)*BLOCK_SIZE; //begin and end keep track of the frames we are sending
 		
-		String ack = "";								//this string will contain the ack in binary. 0 = not acked; 1 = "acked"
+		String ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//this string will contain the ack in binary. 0 = not acked; 1 = "acked"
 		boolean first_pck = true;						//start of transmission
 		byte first[] = new byte[WINDOW_SIZE*BLOCK_SIZE];//Two arrays of bytes that help sending data. They are to be considered consecutive
 		byte sec[] = new byte[WINDOW_SIZE*BLOCK_SIZE]; 	
@@ -86,6 +86,7 @@ public class Client
 		boolean slide = false;							//Used when we have to shift the window
 		int lastSn = 0;									//It becomes != 0 when we reach the final packet
 		int lastSnInWindow = 0;
+		boolean resending = false;
 		
 		while(mustSend)	{
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
@@ -126,11 +127,12 @@ public class Client
 				boolean firstDroppedPck = false;
 				for(int i = 0; i < ack.length(); i++)	{
 					if(ack.substring(i,i+1).equals("0"))	{		//Note that if character is "1", we ignore it
-						if(!firstDroppedPck && lastSn == 0)	{
+						if(!resending && !firstDroppedPck && lastSn == 0)	{
 							firstDroppedPck = true;
 							offset = i;					
 						}
 						lastSnInWindow = sn - 1 + offset;
+						System.out.println("Last sn in window è " + lastSnInWindow + "e i è uguale a " + i + "e pcksInFirst è " + pcksInFirst);
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
 							int pck_size = BLOCK_SIZE;
@@ -153,10 +155,12 @@ public class Client
 						}
 					}
 				}
+				if(ack.equals(Utils.AckToBinaryString((int) Math.pow(2, WINDOW_SIZE) - 1, WINDOW_SIZE)))
+					offset = WINDOW_SIZE;
 				
 				// ---- Slide the window if possible ----
 				
-				if(offset!=0 && lastSn == 0)	{
+				if(offset!=0 && lastSn == 0 && !resending)	{
 					//Case 1: we can slide without problems (here we don't accept sliding to the end of sec array)
 					if((WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE < sec.length)	{
 						begin += offset*BLOCK_SIZE;
@@ -223,6 +227,12 @@ public class Client
 					}
 				}
 			}
+			// ---- Fix the old "ack" string to be consistant with the slide
+			if(slide)	{
+				String zeros = Utils.AckToBinaryString(0, offset);
+				ack = ack.substring(offset) + zeros;
+			}
+			
 			
 			// ---- Send new pcks, if possible ----
 			
@@ -250,6 +260,7 @@ public class Client
 						sn++;
 					}
 				}
+				segmentCounter++;
 				slide = false;		//Ok, we slided, next time we'll see if it's still possible
 			}
 			
@@ -263,8 +274,9 @@ public class Client
 					socket.receive(recvPkt);
 				}
 				catch (SocketTimeoutException e) {
-					System.out.println("timeout for ack n. " + segmentCounter + " expired: resending");
-					ack = Utils.AckToBinaryString(0, WINDOW_SIZE);	//Ack is a string of zeros: nothing was actually acked
+					System.out.println("\n------\nTimeout for ack n. " + segmentCounter + " expired: resending...");
+					ack = Utils.AckToBinaryString(0, WINDOW_SIZE);
+					resending = true;
 					wrongAck = false;
 					continue; 										//Restarts from the main cycle
 				}
@@ -272,7 +284,7 @@ public class Client
 					System.err.println("I/O error while receiving ack packet:\n" + e);
 					socket.close(); System.exit(-1);
 				}
-				
+				resending = false;
 				// ---- Process received ack: put it in binary string form ----
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
@@ -296,6 +308,7 @@ public class Client
 						System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
 					}
 					wrongAck = false;
+					
 				}
 			}
 		}
@@ -335,7 +348,7 @@ public class Client
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 		try {
-			System.out.println("\n------\nSending SN=" + sn);
+			System.out.println("\n------\nSending SN = " + sn);
 			socket.send(sndPkt);
 		}
 		catch(IOException e) {
