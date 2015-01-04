@@ -28,10 +28,10 @@ public class Client
 	private static final int CORE_POOL_SIZE = 1000;
 	private static final int EOB_PRE_SLEEP = 1;
 	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 20;
+	private static final int EOB_INTER_DELAY = 40;
 	
 	static final int PKT_SIZE = 640;
-	static final int PKTS_IN_BLOCK = 1200;
+	static final int PKTS_IN_BLOCK = 400;//1200;
 	static final int BLOCKS_IN_BUFFER = 8;
 	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
@@ -56,6 +56,7 @@ public class Client
 	
 	
 	
+	@SuppressWarnings("resource")
 	public static void main(String args[]) throws IOException
 	{
 		InetAddress channelAddr;
@@ -143,26 +144,28 @@ public class Client
 		// Compute number of packets in the buffer
 		int bufferedPkts = Math.min(PKTS_IN_BUFFER, bufferedBytes / PKT_SIZE + 1);
 
+		// All packets are waiting to be sent. If there are not enough packets, the problem will be dealt with in the method sendBlocksAndEobs()
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
-
-		// 
-		try {
-			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
-			// toBeSent is now all-false
-		} catch (IOException e) {
-			System.err.println("I/O error while sending data");
-			socket.close(); theFile.close(); inStream.close(); System.exit(-1);
-		}
+		// Send first BLOCKS all at once. The buffer will be empty after this, and toBeSent will be all-false
+		sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
 
 
+
+		/* * Main loop * */
+		
+		// Timer for timeout handling
 		long timerStart = System.currentTimeMillis();
 		long timeout = ACK_TIMEOUT;
+		
 		while(!theEnd) {
-
+			
+			// Handle timeout and retransmit proper EOB if needed
 			if (System.currentTimeMillis() > timerStart + timeout) { //timeout since last sent EOB expired
 				int pendingEobAcks = 0;
 				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
+					
+					// Re-send EOB packets that have been awaiting ACK for too long
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 						int times=3;
@@ -172,25 +175,32 @@ public class Client
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						pendingEobAcks++;
 					}
-				if (pendingEobAcks == 0) { // is this block useful at the end of transmission? Isn't the FIN packet enough?
+				
+				// If we're done even without a FIN, close transmission
+				if (pendingEobAcks == 0) { // FIXME We should wait for the FIN
 					System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
 					theEnd = true;
 					break;
 				}
-				if (pendingEobAcks > BLOCKS_IN_BUFFER / 2) {
+				
+				// If we're missing too much stuff maybe there's congestion
+				if (pendingEobAcks > BLOCKS_IN_BUFFER / 2) { // TODO Think about this
 					timeout *= 2;
 				}
 			}
 
+			
 			// ---- Receive packet ----
+			
 			byte[] recvBuf = new byte[RX_BUFSIZE];
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 
+			// Block the thread for a bit and check if something's at the door. Not a problem since the
+			// packets arriving at the client are not a lot.
 			try {
 				socket.setSoTimeout(1);
 				socket.receive(recvPkt);
 			} catch (SocketTimeoutException e) {
-
 				continue;
 			} catch(SocketException e) {
 				System.err.println("Error while setting socket timeout");
@@ -200,12 +210,15 @@ public class Client
 				socket.close(); System.exit(-1);
 			}
 
+			
+			
 
 			// ---- Process received packet ----
 
-			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of recv UDP datagram
+			byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); // Payload of received UDP datagram
 			UTPpacket recvEobAck = new UTPpacket(recvData);		// Parse UDP payload
 
+			// If it's a FIN, end of transmission
 			if (recvEobAck.function == UTPpacket.FUNCT_FIN) {
 				theEnd = true;
 				break;
@@ -216,33 +229,36 @@ public class Client
 				continue;
 
 
-			// It's an EOB_ACK
+			// > It's an EOB ACK! <
+			
+			// If another copy of this EOB ACK was already received (and processed) before, ignore it!
+			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
 			
 			timerStart = System.currentTimeMillis();
-			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
+			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
 			int ackedBn = recvEobAck.endOfBlockAck.bn;
 			if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
-				eob_preSleep *= 2;
+				eob_preSleep = (int) Math.ceil(eob_preSleep * 1.1);
 			
 			// Index of this packet's block in the current window
 			int bnIndexInWindow = ackedBn - windowLeft;
 			if (bnIndexInWindow < 0 || bnIndexInWindow > BLOCKS_IN_BUFFER - 1) continue;
 
-			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
-			
+			// Extract SNs of packets that are missing at the server, and flag them as toBeSent
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
 			int blockOffset = bnIndexInWindow * PKTS_IN_BLOCK;
 			pendingEobAck[bnIndexInWindow] = false;
 			if (numMissingPkts == 0)
+				// If all packets are correctly received, flag the current block as ACKed
 				isBlockAcked[bnIndexInWindow] = true;
 			for (int j = 0; j < numMissingPkts; j++) {
 				int pktInd = missingPkts[j] - snOffset + blockOffset;
 				toBeSent[pktInd] = true;
 			}
 
-			// block at index zero is fine, and we still have data in the tx buffer: shift
+			// The block at index zero is fine, and we still have data in the tx buffer: shift
 			while(isBlockAcked[0] && bufferedBytes >= BYTES_IN_BLOCK) { 
 				
 				Utils.logg("BN " + windowLeft + " was received -> shifting...");
@@ -268,6 +284,7 @@ public class Client
 				Utils.shiftArrayLeft(isBlockAcked, 1);
 				windowLeft++;
 				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
+				// this time we also put a zero padding at the end of the flag array, just because we can.
 				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
@@ -329,14 +346,15 @@ public class Client
 	 * @param dstAddr - IP address of the destination (Server)
 	 * @param eobAssembler
 	 * @param schedExec
-	 * @throws IOException if an I/O error occurs in the socket while sending the datagram
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
-			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, ScheduledThreadPoolExecutor schedExec) throws IOException {
+			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, ScheduledThreadPoolExecutor schedExec) {
 
-		final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
+		if (bufferedBytes < 0)
+			return;
+		
 		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;	
-		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK; // FIXME check bufferedbytes > 0 (or at least non-negative!)
+		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;
 		
 		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
 			numBlocks = BLOCKS_IN_BUFFER;
@@ -357,7 +375,9 @@ public class Client
 			
 			boolean[] toBeSent_thisBlock = new boolean[PKTS_IN_BLOCK];
 //			Utils.logg(numPktsInThisBlock + " pkts in block " + bnInBuffer[i]);
-			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock); // numPktsInThisBlock is the same as PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end
+			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock);
+			// numPktsInThisBlock is the same as PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end.
+			// But in the first transmission (before the loop) it is all true so we must check the actual number of pkts to send
 			
 			int numPktsToSend = Utils.count(toBeSent_thisBlock, true);
 			if (numPktsToSend == 0)
@@ -371,15 +391,13 @@ public class Client
 			DatagramPacket eobPkt = eobAssembler.assembleEobDatagram(bnInWindow(i, windowLeft), numPktsInThisBlock);
 			
 			try {
-				Thread.sleep(eob_preSleep);
+				if(eob_preSleep > 0)
+					Thread.sleep(eob_preSleep);
 			} catch (InterruptedException e) {}
-			int TEMPTIMES = 6; // FIXME
-			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, TEMPTIMES, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
+			int times = 6; // FIXME
+			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, times, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
 			pendingEobAck[i] = true;
-//			sendDatagram(socket, eobPkt);
-//			sendDatagram(socket, eobPkt);
-//			sendDatagram(socket, eobPkt);
-			sentEobPkts += TEMPTIMES;
+			sentEobPkts += times;
 		}
 		
 		// Updates toBeSent array to specify that there are no pending packets to be sent
@@ -392,7 +410,7 @@ public class Client
 	
 	private static int getNumTransmissions(int numPktsToSend) {
 		if (numTransmissionsCache[numPktsToSend-1] == 0)
-			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.2)));
+			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.4)));
 		return numTransmissionsCache[numPktsToSend-1];
 	}
 
@@ -407,7 +425,6 @@ public class Client
 	 * @param socket - the socket on which send and receive operations are performed
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
-	 * @throws IOException if an I/O error occurs in the socket while sending the datagram
 	 */
 	private static void sendSpecificDataPkts(byte[] txBuffer, boolean[] toBeSent, int bn, DatagramSocket socket, InetAddress channelAddr, InetAddress dstAddr) {
 
@@ -475,7 +492,7 @@ public class Client
 
 	/**
 	 * @param socket - the socket on which the packet must be sent
-	 * @param outPkt - the outbound packet
+	 * @param outPkt - the outgoing packet
 	 */
 	private static void sendDatagram(DatagramSocket socket, DatagramPacket outPkt) {
 		try {
@@ -484,5 +501,5 @@ public class Client
 			System.err.println("I/O error while sending datagram");
 			socket.close(); System.exit(-1);;
 		}
-	}
+	}	
 }
