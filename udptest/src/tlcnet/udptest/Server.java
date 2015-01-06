@@ -25,7 +25,7 @@ public class Server {
 	// When the write buffer exceeds this number of bytes, it is written on the output file
 	private static final int WRITEBUF_THRESH = 20 * 1024;
 
-	private static final int WINDOW_TIMEOUT = 200000; //To stop waiting the pck of the window and send the ack
+	private static final int WINDOW_TIMEOUT = 2000; //To stop waiting the pck of the window and send the ack
 	static final int BLOCK_SIZE = 512;					//I don't know if I can put this information here
 
 	public static void main(String[] args) {
@@ -99,7 +99,7 @@ public class Server {
 		while(!gotFIN)
 		{
 			
-					
+			startTransferTime = System.currentTimeMillis();	
 			
 			boolean WINFIN = false;	//Needed to stop the cycle
 			while(!WINFIN && (System.currentTimeMillis() - startTransferTime) < (long)WINDOW_TIMEOUT)	{
@@ -148,14 +148,17 @@ public class Server {
 			
 			else if(notAllAcked){
 					
+				if (recvUTPpkt.lastSnInWindow > lastSnWind){
 				window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
-				firstSnWind = firstFalse;							
+				firstSnWind = firstSnWind + firstFalse;							
 				lastSnWind = recvUTPpkt.lastSnInWindow;
 				startTransferTime = System.currentTimeMillis();			//start the timer
 				DataBuffer = Translation(DataBuffer, firstFalse, window_size, BLOCK_SIZE);//translate the buffer
 				Ack  = Translation(Ack, firstFalse, window_size);
-				
 				new_window = false;
+				notAllAcked = false;
+				}
+				
 			
 			}
 			
@@ -166,18 +169,40 @@ public class Server {
 				
 				//-------for every packet of the window---------
 				
-				SN = recvUTPpkt.sn;				//update current SN 	
+				SN = recvUTPpkt.sn;				//update current SN 
 				
+				System.out.println("Received data: " + recvUTPpkt.payl);
+				System.out.println("SN:" + recvUTPpkt.sn);
+				System.out.println("firstSnWind:" + firstSnWind);
+				System.out.println("lastSnWind Client:" + recvUTPpkt.lastSnInWindow);
+				System.out.println("lastSnWind Server:" + recvUTPpkt.lastSnInWindow);
+				System.out.println("DataBuffer length: " + DataBuffer.length);
+				System.out.println("Window size: " + window_size);
+				System.out.println("----------------------------------------");
+				System.out.println("");
 				
 				
 				//copy data in the cell of the buffer array with the right index
-				System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
-				
-				System.out.println("Received data:" + recvUTPpkt.payl);
-				
+				if(SN >= firstSnWind && lastSnWind == recvUTPpkt.lastSnInWindow){
+				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
+				}
+				catch (ArrayIndexOutOfBoundsException e)	{
+					System.err.println("recvUTPpkt.sn - firstSnWind: " + (recvUTPpkt.sn - firstSnWind));
+					System.err.println("--------------------------");
+					System.err.println("");
+				}
 				
 				//put the 1 in the Ack array in the right position
 				Ack[recvUTPpkt.sn - firstSnWind] = true;
+				}
+				
+				else	{
+					System.out.println("Very old packet, DROPPED!!!");
+					System.out.println("----------------------------------------");
+					System.out.println("");
+				}
+					
+	
 			
 				if(SN == lastSnWind)	{
 					WINFIN = true;		//this is the last packet of the window
@@ -203,7 +228,9 @@ public class Server {
 			else
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
 			
-			System.out.println("Ack array: " + sendUTPpkt.sn );
+			System.out.println("ACK ARRAY: " + Integer.toBinaryString(sendUTPpkt.sn));
+			System.out.println("----------------------------------------");
+			System.out.println("");
 			
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram (UTP packet)
 
