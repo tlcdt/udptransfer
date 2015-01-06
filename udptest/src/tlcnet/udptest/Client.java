@@ -9,7 +9,7 @@ import java.nio.channels.FileChannel;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final int ACK_TIMEOUT = 6000;
+	private static final int ACK_TIMEOUT = 4000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
@@ -92,8 +92,8 @@ public class Client
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
 			if(first_pck)	{
 				first_pck = false;						//The beginning comes just once :P
-				fill(first, chunkContainer, inChannel);	//Initialization: check it out below
-				fill(sec, chunkContainer, inChannel);
+				first = fill(first, chunkContainer, inChannel);	//Initialization: check it out below
+				sec = fill(sec, chunkContainer, inChannel);
 				if(sec.length == 0 && first.length != 0 && first.length < WINDOW_SIZE*BLOCK_SIZE)	{	//This is for small files
 					if(first.length%BLOCK_SIZE != 0)
 						end = (first.length/BLOCK_SIZE)*BLOCK_SIZE;
@@ -124,15 +124,20 @@ public class Client
 			// the next thing will be done only if !first_pck
 			else	{
 				// ---- Check the ack-String for nacks. Then resend nacked pcks. If possible, slide the window and send new pcks. ---
+				if(ack.equals(Utils.AckToBinaryString((int) Math.pow(2, WINDOW_SIZE) - 1, WINDOW_SIZE)))	{
+						offset = WINDOW_SIZE;
+						lastSnInWindow = sn - 1 + offset;
+					}
 				boolean firstDroppedPck = false;
 				for(int i = 0; i < ack.length(); i++)	{
+					
 					if(ack.substring(i,i+1).equals("0"))	{		//Note that if character is "1", we ignore it
 						if(!resending && !firstDroppedPck && lastSn == 0)	{
 							firstDroppedPck = true;
 							offset = i;					
 						}
 						lastSnInWindow = sn - 1 + offset;
-						System.out.println("/n--DEBUG--/nLast sn in window è " + lastSnInWindow + " e i è uguale a " + i + " e pcksInFirst è " + pcksInFirst);
+						
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
 							int pck_size = BLOCK_SIZE;
@@ -146,7 +151,7 @@ public class Client
 						else	{									//...or in second byte array?
 							int index = i - pcksInFirst;
 							int pck_size = BLOCK_SIZE;
-							if((index*BLOCK_SIZE == end) && sec.length%BLOCK_SIZE != 0)	{
+							if((index*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && sec.length%BLOCK_SIZE != 0)	{
 								pck_size = sec.length%BLOCK_SIZE;
 							}
 							byte[] temp = new byte[pck_size]; 
@@ -155,8 +160,7 @@ public class Client
 						}
 					}
 				}
-				if(ack.equals(Utils.AckToBinaryString((int) Math.pow(2, WINDOW_SIZE) - 1, WINDOW_SIZE)))
-					offset = WINDOW_SIZE;
+				
 				
 				// ---- Slide the window if possible ----
 				
@@ -177,7 +181,7 @@ public class Client
 							offset = (sec.length - end)/BLOCK_SIZE - 1;
 						begin += offset*BLOCK_SIZE;
 						end = (WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE;
-						pcksInFirst = first.length - begin;			
+						pcksInFirst = (first.length - begin)/BLOCK_SIZE;			
 						// --- This is the last window ----
 						lastSn = sn - 1 + offset;
 						if(offset != 0)		//Real offset may have changed
@@ -186,15 +190,16 @@ public class Client
 					//Oh, we must read new bytes from chunkContainer!
 					else if(sec.length == BLOCK_SIZE*WINDOW_SIZE)	{
 						first = sec;
-						fill(sec, chunkContainer, inChannel);
+						sec = fill(sec, chunkContainer, inChannel);
 						//Case 3: Ok, now we can slide without any problems
+						System.out.println("LENGTH OF SECOND ARRAY = " + sec.length);
 						if( (offset*BLOCK_SIZE) - (first.length - end - BLOCK_SIZE) <= sec.length)	{
 							begin = (offset - pcksInFirst)*BLOCK_SIZE;
 							if(begin == 0)
 								end = (WINDOW_SIZE -1)*BLOCK_SIZE;
 							else	
 								end = begin - BLOCK_SIZE;
-							pcksInFirst = first.length - begin;
+							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
 							slide = true;
 						}
 						//Case 4: Oh, man...sec array is shorter than usual and we cannot slide so much. This is the last window!
@@ -211,7 +216,7 @@ public class Client
 								offset = pcksInFirst*BLOCK_SIZE + begin;
 							}
 							lastSn = sn - 1 + offset;
-							pcksInFirst = first.length - begin;
+							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
 							slide = true;
 						}
 						//Case 5: sec.length is equal to 0!
@@ -227,7 +232,7 @@ public class Client
 					}
 				}
 			}
-			// ---- Fix the old "ack" string to be consistant with the slide
+			// ---- Fix the old "ack" string to be consistent with the slide
 			if(slide)	{
 				String zeros = Utils.AckToBinaryString(0, offset);
 				ack = ack.substring(offset) + zeros;
@@ -243,18 +248,23 @@ public class Client
 						if((i == WINDOW_SIZE - 1) && first.length%BLOCK_SIZE != 0)	{	//TODO: is this if really necessary, here?
 							pck_size = first.length%BLOCK_SIZE;
 						}
+						System.out.println("Debug: First array before arraycopy. i = " + i + " and pck_size = " + pck_size + " and pcksinfirst = " + pcksInFirst);
 						byte[] temp = new byte[pck_size]; 
 						System.arraycopy(first, begin + i*BLOCK_SIZE, temp, 0, pck_size);
 						send(lastSnInWindow, lastSn, sn, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
 						sn++;
 					}
 					else	{
+						System.out.println("Are there problems?");
 						int index = i - pcksInFirst;
 						int pck_size = BLOCK_SIZE;
-						if((index*BLOCK_SIZE == end) && sec.length%BLOCK_SIZE != 0)	{
+						if((index*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && sec.length%BLOCK_SIZE != 0)	{		//TODO cheeeck
+							System.out.println("shorter packet!");
 							pck_size = sec.length%BLOCK_SIZE;
 						}
+						System.out.println("Debug: befor arraycopy. index = " + index + " and pck_size = " + pck_size);
 						byte[] temp = new byte[pck_size]; 
+						
 						System.arraycopy(sec, index*BLOCK_SIZE, temp, 0, pck_size);
 						send(lastSnInWindow, lastSn, sn, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
 						sn++;
@@ -316,20 +326,25 @@ public class Client
 	
 	//SOME AUXILIARY METHODS
 	
-	static void fill(byte[] array, ByteBuffer container, FileChannel channel)	throws IOException {	//fills an array with data
+	static byte[] fill(byte[] array, ByteBuffer container, FileChannel channel)	throws IOException {	//fills an array with data
 		long howManyBytes = channel.read(container);
+		System.out.println("/n*********************/nHowManyBytes = " + howManyBytes);
 		if(howManyBytes == BLOCK_SIZE*WINDOW_SIZE)	{
 			container.flip();	//Important! Otherwise .remaining() method gives 0
 			container.get(array, 0, array.length);
 			container.clear();
+			return array;
 		}
 		else if(howManyBytes > 0)	{
 			container.flip();	
 			array = new byte[container.remaining()];		//resize the array
+			System.out.println("/n*********************/nREMAINING = " + container.remaining());
 			container.get(array, 0, array.length);
 			container.clear();
+			return array;
 		}
 		else array = new byte[0];							//empty array
+		return array;
 	}
 	
 	static void send(int lastSnInWindow, int lastSn, int sn, byte[] temp, InetAddress dstAddr, int dstPort, InetAddress channelAddr, int channelPort, DatagramSocket socket, RandomAccessFile theFile) 
@@ -346,6 +361,10 @@ public class Client
 		sendUTPpkt.payl = temp;	
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
+		//----DEBUG----
+		System.out.println("/n--DEBUG--/nLast sn in window è " + lastSnInWindow + "; il SN è " + sn);
+		if(lastSnInWindow - sn < 0)
+			System.out.println("ERRORE!! CONTROLLARE L'AGGIORNAMENTO DI LASTSNINW.");
 		try {
 			System.out.println("\n------\nSending SN = " + sn);
 			socket.send(sndPkt);
