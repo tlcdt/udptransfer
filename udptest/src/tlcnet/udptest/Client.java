@@ -141,7 +141,7 @@ public class Client
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
 							int pck_size = BLOCK_SIZE;
-							if((i*BLOCK_SIZE == end) && first.length%BLOCK_SIZE != 0)	{
+							if((i*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && first.length%BLOCK_SIZE != 0)	{
 								pck_size = first.length%BLOCK_SIZE;
 							}
 							byte[] temp = new byte[pck_size]; 
@@ -175,12 +175,18 @@ public class Client
 					//Case 2: Not possible to slide so much. Sec array is shorter than the normal size: we are transmitting last window. 
 					//So we slide as much as we can!
 					else if(sec.length!=0 && sec.length < BLOCK_SIZE*WINDOW_SIZE)	{
-						if((sec.length - end)%BLOCK_SIZE != 0)		//Last packet could be smaller than BLOCK_SIZE
-							offset = (sec.length - end)/BLOCK_SIZE;
+						if(sec.length%BLOCK_SIZE != 0)		//Last packet could be smaller than BLOCK_SIZE
+							if(begin == 0)
+								offset = sec.length/BLOCK_SIZE +1;
+							else
+								offset = (sec.length - end)/BLOCK_SIZE;
 						else
-							offset = (sec.length - end)/BLOCK_SIZE - 1;
+							if(begin == 0)
+								offset = sec.length/BLOCK_SIZE;
+							else
+								offset = (sec.length - end)/BLOCK_SIZE - 1;
 						begin += offset*BLOCK_SIZE;
-						end = (WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE;
+						end = (WINDOW_SIZE - pcksInFirst + offset - 1)*BLOCK_SIZE ;
 						pcksInFirst = (first.length - begin)/BLOCK_SIZE;			
 						// --- This is the last window ----
 						lastSn = sn - 1 + offset;
@@ -192,7 +198,7 @@ public class Client
 						first = sec;
 						sec = fill(sec, chunkContainer, inChannel);
 						//Case 3: Ok, now we can slide without any problems
-						System.out.println("LENGTH OF SECOND ARRAY = " + sec.length);
+						//System.out.println("LENGTH OF SECOND ARRAY after sliding = " + sec.length);
 						if( (offset*BLOCK_SIZE) - (first.length - end - BLOCK_SIZE) <= sec.length)	{
 							begin = (offset - pcksInFirst)*BLOCK_SIZE;
 							if(begin == 0)
@@ -206,14 +212,14 @@ public class Client
 						//We slide as much as we can
 						else if(sec.length != 0 && sec.length < BLOCK_SIZE*WINDOW_SIZE)	{
 							if(sec.length%BLOCK_SIZE != 0)	{
-								end = sec.length/BLOCK_SIZE;
+								end = (sec.length/BLOCK_SIZE)*BLOCK_SIZE;
 								begin = end + BLOCK_SIZE;
-								offset = pcksInFirst*BLOCK_SIZE + begin;
+								offset = pcksInFirst + begin/BLOCK_SIZE;
 							}
 							else	{
-								end = sec.length/BLOCK_SIZE - 1;
+								end = (sec.length/BLOCK_SIZE - 1)*BLOCK_SIZE;
 								begin = end + BLOCK_SIZE;
-								offset = pcksInFirst*BLOCK_SIZE + begin;
+								offset = pcksInFirst + begin/BLOCK_SIZE;
 							}
 							lastSn = sn - 1 + offset;
 							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
@@ -223,7 +229,7 @@ public class Client
 						else	{
 							end = (WINDOW_SIZE - 1)*BLOCK_SIZE;
 							begin = 0;
-							offset = pcksInFirst*BLOCK_SIZE + begin;
+							offset = pcksInFirst + begin/BLOCK_SIZE;
 							pcksInFirst = WINDOW_SIZE;
 							lastSn = sn - 1 + offset;
 							if(offset != 0)
@@ -234,6 +240,7 @@ public class Client
 			}
 			// ---- Fix the old "ack" string to be consistent with the slide
 			if(slide)	{
+				//System.out.println("Problems? offset = " + offset + end);
 				String zeros = Utils.AckToBinaryString(0, offset);
 				ack = ack.substring(offset) + zeros;
 			}
@@ -248,21 +255,20 @@ public class Client
 						if((i == WINDOW_SIZE - 1) && first.length%BLOCK_SIZE != 0)	{	//TODO: is this if really necessary, here?
 							pck_size = first.length%BLOCK_SIZE;
 						}
-						System.out.println("Debug: First array before arraycopy. i = " + i + " and pck_size = " + pck_size + " and pcksinfirst = " + pcksInFirst);
+						//System.out.println("Debug: (First array) before arraycopy. i = " + i + " and pck_size = " + pck_size + " and pcksinfirst = " + pcksInFirst);
 						byte[] temp = new byte[pck_size]; 
 						System.arraycopy(first, begin + i*BLOCK_SIZE, temp, 0, pck_size);
 						send(lastSnInWindow, lastSn, sn, temp, dstAddr, dstPort, channelAddr, channelPort, socket, theFile);
 						sn++;
 					}
 					else	{
-						System.out.println("Are there problems?");
 						int index = i - pcksInFirst;
 						int pck_size = BLOCK_SIZE;
 						if((index*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && sec.length%BLOCK_SIZE != 0)	{		//TODO cheeeck
 							System.out.println("shorter packet!");
 							pck_size = sec.length%BLOCK_SIZE;
 						}
-						System.out.println("Debug: befor arraycopy. index = " + index + " and pck_size = " + pck_size);
+						//System.out.println("Debug... before arraycopy: index = " + index + "; pck_size = " + pck_size + "; end = " + end);
 						byte[] temp = new byte[pck_size]; 
 						
 						System.arraycopy(sec, index*BLOCK_SIZE, temp, 0, pck_size);
@@ -284,7 +290,7 @@ public class Client
 					socket.receive(recvPkt);
 				}
 				catch (SocketTimeoutException e) {
-					System.out.println("\n------\nTimeout for ack n. " + segmentCounter + " expired: resending...");
+					System.out.println("\n------\nTimeout for ack n. " + segmentCounter + " expired: resending...\n------\n");
 					resending = true;
 					wrongAck = false;
 					continue; 										//Restarts from the main cycle
@@ -328,7 +334,6 @@ public class Client
 	
 	static byte[] fill(byte[] array, ByteBuffer container, FileChannel channel)	throws IOException {	//fills an array with data
 		long howManyBytes = channel.read(container);
-		System.out.println("/n*********************/nHowManyBytes = " + howManyBytes);
 		if(howManyBytes == BLOCK_SIZE*WINDOW_SIZE)	{
 			container.flip();	//Important! Otherwise .remaining() method gives 0
 			container.get(array, 0, array.length);
@@ -338,7 +343,7 @@ public class Client
 		else if(howManyBytes > 0)	{
 			container.flip();	
 			array = new byte[container.remaining()];		//resize the array
-			System.out.println("/n*********************/nREMAINING = " + container.remaining());
+			System.out.println("*********************/nREMAINING BYTES = " + container.remaining() + "\n*****************\n");
 			container.get(array, 0, array.length);
 			container.clear();
 			return array;
@@ -366,7 +371,7 @@ public class Client
 		if(lastSnInWindow - sn < 0)
 			System.out.println("ERRORE!! CONTROLLARE L'AGGIORNAMENTO DI LASTSNINW.");
 		try {
-			System.out.println("\n------\nSending SN = " + sn);
+			System.out.println("------\nSending SN = " + sn + "\n------");
 			socket.send(sndPkt);
 		}
 		catch(IOException e) {
