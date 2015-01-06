@@ -30,6 +30,8 @@ public class Client
 	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
 	private static final int EOB_INTER_DELAY = 40;
 	
+	private static final int NUM_OF_EOBS = 4; // each time we send an EOB, we send it NUM_OF_EOBS times.
+	
 	static final int PKT_SIZE = 640;
 	static final int PKTS_IN_BLOCK = 400;//1200;
 	static final int BLOCKS_IN_BUFFER = 8;
@@ -50,8 +52,6 @@ public class Client
 	/*private static int spaceOutFactor = 1;
 	private static final int SPACE_OUT_DELAY = 50;*/
 	
-
-	// FIXME If the file size is a multiple of PKT_SIZE, a last extra packet with length 0 must be sent.
 
 	
 	
@@ -168,16 +168,17 @@ public class Client
 					// Re-send EOB packets that have been awaiting ACK for too long
 					if (pendingEobAck[j]) {
 						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
-						int times=3;
-						for (int k = 0; k < times; k++)
+						// We get from the cache a copy of the current EOB without SN, to avoid the possibility that the server discards it
+						for (int k = 0; k < NUM_OF_EOBS; k++)
 							sendDatagram(socket, eobAssembler.getFromCache(j));
-						sentEobPkts += times;
+						sentEobPkts += NUM_OF_EOBS;
+						// Just sent an EOB: reset the timer
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						pendingEobAcks++;
 					}
 				
 				// If we're done even without a FIN, close transmission
-				if (pendingEobAcks == 0) { // FIXME We should wait for the FIN
+				if (pendingEobAcks == 0) {
 					System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
 					theEnd = true;
 					break;
@@ -236,23 +237,28 @@ public class Client
 			
 			timerStart = System.currentTimeMillis();
 			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
-			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;
-			int ackedBn = recvEobAck.endOfBlockAck.bn;
+			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;	// Number of packets of this block that the server hasn't received yet
+			int ackedBn = recvEobAck.endOfBlockAck.bn;	// BN of the block this ACK is referred to
+			
+			// Lost too many packets? Something's wrong: let's increase the pause between the tx of blocks
 			if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
 				eob_preSleep = (int) Math.ceil(eob_preSleep * 1.1);
 			
-			// Index of this packet's block in the current window
+			// Index of this packet's block in the current window. If it's outside the window, ignore it.
 			int bnIndexInWindow = ackedBn - windowLeft;
 			if (bnIndexInWindow < 0 || bnIndexInWindow > BLOCKS_IN_BUFFER - 1) continue;
 
-			// Extract SNs of packets that are missing at the server, and flag them as toBeSent
+			// Extract SNs of packets that are missing at the server (we're gonna flag them as toBeSent)
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
-			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// sn offset for the BN that was just ACKed		
+			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// SN offset for the BN that was just ACKed		
 			int blockOffset = bnIndexInWindow * PKTS_IN_BLOCK;
-			pendingEobAck[bnIndexInWindow] = false;
+			pendingEobAck[bnIndexInWindow] = false;	// No longer waiting for the EOB ACK for this block
+			
+			// If all packets are correctly received, flag the current block as ACKed
 			if (numMissingPkts == 0)
-				// If all packets are correctly received, flag the current block as ACKed
 				isBlockAcked[bnIndexInWindow] = true;
+			
+			// Flag the missing packets as toBeSent
 			for (int j = 0; j < numMissingPkts; j++) {
 				int pktInd = missingPkts[j] - snOffset + blockOffset;
 				toBeSent[pktInd] = true;
@@ -288,6 +294,7 @@ public class Client
 				Arrays.fill(toBeSent, toBeSent.length - PKTS_IN_BLOCK, toBeSent.length - PKTS_IN_BLOCK + newPkts, true);				
 			}
 
+			// Send selected packets from all the blocks in the current window, and at the end of each block send an EOB packet
 			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
 		}
 
@@ -336,68 +343,78 @@ public class Client
 
 
 	/**
-	 * @param txBuffer
-	 * @param toBeSent
+	 * 
+	 * 
+	 * @param txBuffer - the transmission buffer as array of bytes
+	 * @param toBeSent - array of flags that indicate whether a packet in the buffer has to be sent
 	 * @param windowLeft - Block Number of the leftmost block in the current window.
 	 * @param bufferedBytes - the actual number of bytes in the buffer. It is generally fixed, but it can be
 	 * any number between 0 and BUFFER_SIZE if the last block is also the last block of the file transfer operation.
 	 * @param socket - the socket on which send and receive operations are performed
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
-	 * @param eobAssembler
-	 * @param schedExec
+	 * @param eobAssembler - this object assembles EOB packets and stores them in a cache that has the size of the window, in order
+	 * to retransmit them when needed. It must be the same object throughout the whole execution of the program
+	 * @param schedExec - a ScheduledThreadPoolExecutor with a sufficient pool size: its purpose is to send EOB packets asynchronously
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
 			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, ScheduledThreadPoolExecutor schedExec) {
 
-		if (bufferedBytes < 0)
+		if (bufferedBytes < 0)	// should never happen, but better safe than sorry
 			return;
 		
-		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;	
-		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;
-		
+		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;		// n. of blocks actually stored in the buffer
+		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;	// bytes of data in the last block stored in the buffer
 		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
 			numBlocks = BLOCKS_IN_BUFFER;
 			bytesInLastBlock = BYTES_IN_BLOCK;
 		}
-		int lastBlockIndex = numBlocks - 1;
-//		Utils.logg("num blocks = " + numBlocks);
-//		Utils.logg(bytesInLastBlock);
 		
 		for (int i = 0; i < numBlocks; i++) {
 			int bytesInThisBlock = BYTES_IN_BLOCK;
-			if (i == lastBlockIndex)
-				bytesInThisBlock = bytesInLastBlock;
+			if (i == numBlocks - 1)	// if this is the last block actually stored in the buffer...
+				bytesInThisBlock = bytesInLastBlock; // ...set the correct value to bytesInThisBlock
 			
+			// Number of packets stored in the current block: lower than usual only if this is the last block
 			int numPktsInThisBlock = Math.min(PKTS_IN_BLOCK, bytesInThisBlock / PKT_SIZE + 1);
+			// if the block is full, (bytesInThisBlock / PKT_SIZE + 1) would give an extra empty packet, which is true only if the number of packets is PKTS_IN_BLOCK-1 and the last packet is empty
+			
+			// Get the chunk of buffer that corresponds to this block
 			byte[] txBuf_thisBlock = new byte[bytesInThisBlock];
 			System.arraycopy(txBuffer, BYTES_IN_BLOCK * i, txBuf_thisBlock, 0, bytesInThisBlock);
 			
+			// Get the toBeSent flags of this block only
 			boolean[] toBeSent_thisBlock = new boolean[PKTS_IN_BLOCK];
 //			Utils.logg(numPktsInThisBlock + " pkts in block " + bnInBuffer[i]);
 			System.arraycopy(toBeSent, PKTS_IN_BLOCK * i, toBeSent_thisBlock, 0, numPktsInThisBlock);
 			// numPktsInThisBlock is the same as PKTS_IN_BLOCK, since anyway toBeSent has false-padding in the end.
 			// But in the first transmission (before the loop) it is all true so we must check the actual number of pkts to send
 			
+			// Go on only if we need to actually send something (we know this from the flags in toBeSent)
 			int numPktsToSend = Utils.count(toBeSent_thisBlock, true);
 			if (numPktsToSend == 0)
 				continue;
 			
+			// Need to send really few packets from this block? Why not send them even more times?
 			int numTxForCurrBlock = getNumTransmissions(numPktsToSend);
 			//Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInBuffer[i] + " (" + numTxForCurrBlock + " times)");
 			for (int j = 0; j < numTxForCurrBlock; j++)
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
 
+			// Prepare EOB packet (eobAssembler will store it in an SN-less form in its cache)
 			DatagramPacket eobPkt = eobAssembler.assembleEobDatagram(bnInWindow(i, windowLeft), numPktsInThisBlock);
 			
+			// Pause a little bit: the server may receive this too early (this may play a role in congestion control as well)
 			try {
 				if(eob_preSleep > 0)
 					Thread.sleep(eob_preSleep);
 			} catch (InterruptedException e) {}
-			int times = 6; // FIXME
-			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, times, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
-			pendingEobAck[i] = true;
-			sentEobPkts += times;
+			
+			// Send EOB packet asynchronously: see javadoc for the class AsyncRepeatedPacketSender
+			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, NUM_OF_EOBS, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
+			pendingEobAck[i] = true; // we are now waiting for an ACK of the current EOB
+			
+			sentEobPkts += NUM_OF_EOBS;	// stupid counter
 		}
 		
 		// Updates toBeSent array to specify that there are no pending packets to be sent
@@ -419,9 +436,11 @@ public class Client
 	
 
 	/**
-	 * @param txBuffer
-	 * @param toBeSent
-	 * @param bn
+	 * Sends specific data packets (those that have not been received yet by the server) from the current block.
+	 * 
+	 * @param txBuffer - a byte array with all data of this block (just the current block, not the whole buffer)
+	 * @param toBeSent - array of flags that indicate whether a packet from this block has to be sent
+	 * @param bn - Block Number of the current block
 	 * @param socket - the socket on which send and receive operations are performed
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
@@ -454,14 +473,11 @@ public class Client
 			// index of the first and last+1 byte of the current packet in the tx buffer
 			int currPktStart = pktInd * PKT_SIZE;
 			int currPktEnd = Math.min (currPktStart + PKT_SIZE, txBuffer.length);
-			
-			//Utils.logg("SN = " + (snOffset + pktInd));
-			//Utils.logg("currPktStart = " + currPktStart);
-			//Utils.logg("currPktEnd = " + currPktEnd);
 
 			// Payload of the current UDP packet. It's taken from the tx buffer.
 			byte[] currPkt = Arrays.copyOfRange(txBuffer, currPktStart, currPktEnd);
 
+			// Create UTPpacket object and get a DatagramPacket
 			UTPpacket sendUTPpkt = new UTPpacket();
 			sendUTPpkt.sn = snOffset + pktInd;
 			sendUTPpkt.dstAddr = dstAddr;
@@ -491,6 +507,8 @@ public class Client
 
 
 	/**
+	 * Sends a DatagramPacket (UDP datagram) over the specified socket, and terminates the process if an error occurs.
+	 * 
 	 * @param socket - the socket on which the packet must be sent
 	 * @param outPkt - the outgoing packet
 	 */
