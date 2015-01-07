@@ -129,6 +129,11 @@ public class Utils {
 		Arrays.fill(array, array.length - offset, array.length, 0);
 	}
 	
+	public static void shiftArrayLeft(long[] array, int offset) {
+		System.arraycopy(array, offset, array, 0, array.length - offset);
+		Arrays.fill(array, array.length - offset, array.length, 0);
+	}
+	
 	public static void shiftArrayLeft(byte[] array, int offset) {
 		System.arraycopy(array, offset, array, 0, array.length - offset);
 		Arrays.fill(array, array.length - offset, array.length, (byte) 0);

@@ -25,16 +25,16 @@ public class Client
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	
-	private static final int CORE_POOL_SIZE = 1000;
-	private static final int EOB_PRE_SLEEP = 1;
-	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 40;
+	private static final int CORE_POOL_SIZE = 20;
+	private static final int EOB_PRE_SLEEP = 10;
+	private static final int EOB_PRE_DELAY = 200; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 150;
 	
 	private static final int NUM_OF_EOBS = 4; // each time we send an EOB, we send it NUM_OF_EOBS times.
 	
 	static final int PKT_SIZE = 640;
-	static final int PKTS_IN_BLOCK = 400;//1200;
-	static final int BLOCKS_IN_BUFFER = 8;
+	static final int PKTS_IN_BLOCK = 200;
+	static final int BLOCKS_IN_BUFFER = 32;
 	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
@@ -44,7 +44,6 @@ public class Client
 	
 	private static int sentDataPkts = 0;
 	private static int sentEobPkts = 0;
-	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	private static boolean[] pendingEobAck;
 	private static int eob_preSleep = EOB_PRE_SLEEP;
@@ -72,6 +71,7 @@ public class Client
 		// Create socket
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
+			socket.setSoTimeout(1);
 		} catch (SocketException e) {
 			System.err.println("Error creating datagram socket:\n" + e);
 			return;
@@ -134,6 +134,12 @@ public class Client
 		// * * * * * * * * * * * *//
 
 
+		EobTimers eobTimers = new EobTimers(BLOCKS_IN_BUFFER);
+		
+		// This object's job is to identify EOB ACK packets that have already been received before.
+		// These packets will be dropped, so as to avoid useless retransmission of data packets.
+		DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
+		
 		// Read first chunk from file
 		int bytesRead = inStream.read(txBuffer, 0, txBuffer.length);
 
@@ -173,6 +179,7 @@ public class Client
 							sendDatagram(socket, eobAssembler.getFromCache(j));
 						sentEobPkts += NUM_OF_EOBS;
 						// Just sent an EOB: reset the timer
+						eobTimers.reset(j);
 						timerStart = System.currentTimeMillis(); // TODO one timer for each block
 						pendingEobAcks++;
 					}
@@ -199,7 +206,6 @@ public class Client
 			// Block the thread for a bit and check if something's at the door. Not a problem since the
 			// packets arriving at the client are not a lot.
 			try {
-				socket.setSoTimeout(1);
 				socket.receive(recvPkt);
 			} catch (SocketTimeoutException e) {
 				continue;
@@ -241,8 +247,8 @@ public class Client
 			int ackedBn = recvEobAck.endOfBlockAck.bn;	// BN of the block this ACK is referred to
 			
 			// Lost too many packets? Something's wrong: let's increase the pause between the tx of blocks
-			if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
-				eob_preSleep = (int) Math.ceil(eob_preSleep * 1.1);
+			/*if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
+				eob_preSleep = (int) Math.ceil(eob_preSleep * 1.1);*/
 			
 			// Index of this packet's block in the current window. If it's outside the window, ignore it.
 			int bnIndexInWindow = ackedBn - windowLeft;

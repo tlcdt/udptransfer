@@ -38,7 +38,6 @@ public class Server {
 	private static InetAddress clientAddr = null;
 	
 	static int eobSn = 1;
-	private static DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 
 
 
@@ -100,6 +99,10 @@ public class Server {
 		int bytesWritten = 0;
 		int bufferedBytes = 0;
 		int receivedBytes = 0;
+		
+		// This object's job is to identify EOB ACK packets that have already been received before.
+		// These packets will be dropped, so as to avoid useless retransmission of data packets.
+		DuplicateIdHandler dupEobHandler = new DuplicateIdHandler();
 
 		// Counters for duplicate data packets and packets belonging to future BNs (for performance analysis purpose)
 		int duplicateCounter = 0;
@@ -230,11 +233,11 @@ public class Server {
 				
 				// -- Assemble and send EOB_ACK
 
-				int numOfEobAckTx = 50;//missingSN.length / 50 + 3;
+				int numOfEobAckTx = 20;//missingSN.length / 50 + 3;
 				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
 				for (int k = 0; k < numOfEobAckTx; k++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
-				
+
 				// This block has been received correctly!
 				if (missingSN.length == 0) {
 					Utils.logg("Received correctly BN=" + bn);

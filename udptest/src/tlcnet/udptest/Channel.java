@@ -5,6 +5,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -12,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 public class Channel {
 	static final int DEF_CHANNEL_RCV_PORT = 65432;
-	private static final int CORE_POOL_SIZE = 1000;
+	private static final int CORE_POOL_SIZE = 50;
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
 
 	
@@ -21,11 +22,14 @@ public class Channel {
 		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
 		
+		int toServer = 0;
+		
 		// --- Create listen and send sockets ---
 		DatagramSocket listenSocket = null;
 		DatagramSocket outSocket = null;
 		try {
 			listenSocket = new DatagramSocket(listenPort);
+			listenSocket.setSoTimeout(10000);
 		} catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
@@ -44,7 +48,6 @@ public class Channel {
 		ChannelGenericPacketParser pktParser = new ChannelGenericPacketParser();
 
 		
-		
 		// * * *  MAIN LOOP  * * *
 		
 		while(true) {
@@ -54,7 +57,10 @@ public class Channel {
 			DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 			try {
 				listenSocket.receive(recvPkt);
-			} catch(IOException e) {
+			} catch(SocketTimeoutException e) {
+				break;
+			}
+			catch(IOException e) {
 				System.err.println("I/O error while receiving datagram:\n" + e);
 				listenSocket.close(); outSocket.close(); System.exit(-1);
 			}
@@ -66,6 +72,9 @@ public class Channel {
 			pktParser.setPayload(udpPayload);
 			InetAddress dstAddr = pktParser.getDstAddr();
 			int dstPort = pktParser.getDstPort();
+			
+			if(dstPort == Server.DEF_SERVER_PORT)
+				toServer++;
 			
 			// The following is compatible only with our format.
 			/*UTPpacket utpPkt = new UTPpacket(udpPayload);		// parse UDP payload
@@ -97,6 +106,10 @@ public class Channel {
 //			else if (dstPort == Server.DEF_SERVER_PORT)
 //				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
 		}
+		
+		
+		Utils.logg("Packets to server: " + toServer);
+		schedExec.shutdownNow();
 	}
 
 
