@@ -9,7 +9,7 @@ import java.nio.channels.FileChannel;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final int ACK_TIMEOUT = 4000;
+	private static final int ACK_TIMEOUT = 1000;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
@@ -87,6 +87,7 @@ public class Client
 		int lastSn = 0;									//It becomes != 0 when we reach the final packet
 		int lastSnInWindow = 0;
 		boolean resending = false;
+		boolean rep = false;
 		
 		while(mustSend)	{
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
@@ -132,7 +133,7 @@ public class Client
 				for(int i = 0; i < ack.length(); i++)	{
 					
 					if(ack.substring(i,i+1).equals("0"))	{		//Note that if character is "1", we ignore it
-						if(!resending && !firstDroppedPck && lastSn == 0)	{
+						if(!rep && !firstDroppedPck && lastSn == 0)	{
 							firstDroppedPck = true;
 							offset = i;					
 						}
@@ -164,7 +165,7 @@ public class Client
 				
 				// ---- Slide the window if possible ----
 				
-				if(offset!=0 && lastSn == 0 && !resending)	{
+				if(offset!=0 && lastSn == 0 && !rep)	{
 					//Case 1: we can slide without problems (here we don't accept sliding to the end of sec array)
 					if((WINDOW_SIZE - pcksInFirst + offset)*BLOCK_SIZE < sec.length)	{
 						begin += offset*BLOCK_SIZE;
@@ -281,51 +282,71 @@ public class Client
 			}
 			
 			// ---- Receive ack ----
-			boolean wrongAck = true;
-			while(wrongAck)	{
+			long ack_start = System.currentTimeMillis();
+			int countOnes = 0;
+			boolean keepTrying = true;
+			//System.out.println("Il timer è a " + ack_start);
+			while(keepTrying && System.currentTimeMillis() - ack_start < 2000)	{
+				
 				byte[] recvBuf = new byte[RX_BUFSIZE];
 				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
 				socket.setSoTimeout(ACK_TIMEOUT);
 				try{
 					socket.receive(recvPkt);
 				}
-				catch (SocketTimeoutException e) {
-					System.out.println("\n------\nTimeout for ack n. " + segmentCounter + " expired: resending...\n------\n");
-					resending = true;
-					wrongAck = false;
-					continue; 										//Restarts from the main cycle
+				catch (SocketTimeoutException e) {		
+					System.out.println("Timeout for ack expired...");
+					continue;
 				}
 				catch(IOException e) {
 					System.err.println("I/O error while receiving ack packet:\n" + e);
 					socket.close(); System.exit(-1);
 				}
-				resending = false;
-				// ---- Process received ack: put it in binary string form ----
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
 				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
-					ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class 
-					//Debug
-					System.out.println("ACK n. " + segmentCounter + ": " + ack);			
-					
-					//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
-					//(no more data). I realized that, since we send old nacked packets BEFORE sliding the window, when we send them 
-					//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
-					//ack, fixing it.
-					
-					if(lastSn != 0 && lastSnInWindow != lastSn)	{
-						int digits = (lastSnInWindow - lastSn);
-						String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
-						ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+					System.out.println("Ok, the ack should be received now........");
+					if(!rep)	{			//this window hasn't already been sent
+						System.out.println("Ok, the ack should be received now...");
+						keepTrying = false;
 					}
+					else if(recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.sn > countOnes)	{		//The packet with the most acks wins
+						countOnes = recvUTPpkt.sn;
+						ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class
+					}
+					// ---- Process received ack: put it in binary string form ----
+					
+					//Debug
+					System.out.println("ACK n. " + segmentCounter + ": " + ack);
+					
 					if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)	{		//It means that everything was acked
 						mustSend = false;
 						System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
 					}
-					wrongAck = false;
-					
 				}
 			}
+			if(keepTrying && countOnes == 0)	{
+				System.out.println("Couldn't receive any ack for segment " + segmentCounter + "...resending.");
+				ack = Utils.AckToBinaryString(0, WINDOW_SIZE);
+				rep = true;
+				resending = true;
+			}
+
+			//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
+			//(no more data). I realized that, since we send old nacked packets BEFORE sliding the window, when we send them 
+			//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
+			//ack, fixing it.
+				
+			if(ack.substring(0, 1).equals("0"))
+				rep = true;
+			else
+				rep = false;
+			if(lastSn != 0 && lastSnInWindow != lastSn)	{
+				int digits = (lastSnInWindow - lastSn);
+				String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
+				ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+			}
+			
 		}
 	}
 	
