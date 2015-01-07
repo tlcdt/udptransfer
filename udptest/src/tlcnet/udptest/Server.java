@@ -93,7 +93,8 @@ public class Server {
 		boolean allTrue = true;
 		boolean allFalse = false;
 		int firstFalse = 0;
-		
+		int snFIN = 0;
+		int snFINWind = 0;
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
@@ -134,7 +135,7 @@ public class Server {
 			//--------Only the first packet of the window------- 
 			if(new_window)	{
 				
-				window_size = recvUTPpkt.lastSnInWindow - lastSnWind; //get the current window size
+				//window_size = recvUTPpkt.lastSnInWindow - lastSnWind; //get the current window size
 				firstSnWind = lastSnWind + 1;						
 				lastSnWind = recvUTPpkt.lastSnInWindow;
 				startTransferTime = System.currentTimeMillis();			//start the timer
@@ -149,7 +150,7 @@ public class Server {
 			else if(notAllAcked){
 					
 				if (recvUTPpkt.lastSnInWindow > lastSnWind){
-				window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
+				//window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
 				firstSnWind = firstSnWind + firstFalse;							
 				lastSnWind = recvUTPpkt.lastSnInWindow;
 				startTransferTime = System.currentTimeMillis();			//start the timer
@@ -162,8 +163,11 @@ public class Server {
 			
 			}
 			
-			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN)	{		//received the FIN packet
+			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN )	{		//received the FIN packet
 				gotFIN = true;
+				snFIN = recvUTPpkt.sn;
+				snFINWind = snFIN - firstSnWind;
+				
 			}
 				
 				
@@ -171,19 +175,22 @@ public class Server {
 				
 				SN = recvUTPpkt.sn;				//update current SN 
 				
+				
+				//Debug
 				System.out.println("Received data: " + recvUTPpkt.payl);
-				System.out.println("SN:" + recvUTPpkt.sn);
+				System.out.println("SN:" + recvUTPpkt.sn);				
 				System.out.println("firstSnWind:" + firstSnWind);
 				System.out.println("lastSnWind Client:" + recvUTPpkt.lastSnInWindow);
-				System.out.println("lastSnWind Server:" + recvUTPpkt.lastSnInWindow);
+				System.out.println("lastSnWind Server:" + lastSnWind);
 				System.out.println("DataBuffer length: " + DataBuffer.length);
 				System.out.println("Window size: " + window_size);
+				if(gotFIN) System.out.println("IT'S A FIN!!!!!!! :-)");
 				System.out.println("----------------------------------------");
 				System.out.println("");
 				
 				
 				//copy data in the cell of the buffer array with the right index
-				if(SN >= firstSnWind && lastSnWind == recvUTPpkt.lastSnInWindow){
+				if(recvUTPpkt.sn >= firstSnWind && lastSnWind == recvUTPpkt.lastSnInWindow){
 				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
 				}
 				catch (ArrayIndexOutOfBoundsException e)	{
@@ -211,8 +218,12 @@ public class Server {
 			}
 			
 			
-
-		
+			
+			//--------check the ACK array---------
+			
+			allTrue = areAllTrue(Ack);
+			allFalse = areAllFalse(Ack);
+			firstFalse = 0;
 			
 			//------ACK packet------
 			
@@ -223,10 +234,15 @@ public class Server {
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 			sendUTPpkt.lastSnInWindow = lastSnWind;
 			sendUTPpkt.payl = new byte[0];
-			if(gotFIN)		
+			if(gotFIN && FirstFalse(Ack)== (snFINWind + 1))	{						//TODO: aggiungere la condizione se ho ricevuto tutti i pacchetti prima del fin
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
+				gotFIN = true;
+			}
 			else
+			{
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
+				gotFIN = false;
+				}
 			
 			System.out.println("ACK ARRAY: " + Integer.toBinaryString(sendUTPpkt.sn));
 			System.out.println("----------------------------------------");
@@ -234,33 +250,9 @@ public class Server {
 			
 			byte[] sendData = sendUTPpkt.getRawData(); 	// payload of outgoing UDP datagram (UTP packet)
 
-
-
-/*
-			//DEBUG
-			System.out.println("\n------ RECEIVED\nHeader:\n" + Utils.byteArr2str(Arrays.copyOf(recvData, UTPpacket.HEADER_LENGTH)));
-			System.out.println("SN=" + recvUTPpkt.sn + "\n Payload length = " + recvUTPpkt.payl.length);
-			if(gotFIN)
-				System.out.println("Oh, this is a FIN! I'll ack it right away!");
-*/
-
-
-
-
-			// Append received packet to the ByteArrayOutputStream
-			// TODO: (for the Client as well) Maybe read/write asynchronously from/to file so as to optimize computational time for I/O operations?
-			
-			
-			//----------------TODO:ripartire da qui!!! Controllare le varie condizioni in cui possono 
-			//----------------arrivare i pacchetti. La creazione del file. La gestione degli ACK.
-			
 	
 			
-			//--------check the ACK array---------
 			
-			allTrue = areAllTrue(Ack);
-			allFalse = areAllFalse(Ack);
-			firstFalse = 0;
 			
 			//----------if ALL TRUE = true, proceed in the standard manner------------
 			if(allTrue)	{
@@ -285,7 +277,9 @@ public class Server {
 			// --- Send ACK---
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 			try{
+				for(int i = 0; i<3; i++)	{
 				socket.send(sendPkt);
+				}
 			}
 			catch(IOException e) {
 				System.err.println("I/O error while sending datagram:\n" + e);
@@ -322,7 +316,9 @@ public class Server {
 				// --- Send ACK---
 				DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 				try{
-					socket.send(sendPkt);
+					for(int j = 0; j<3; j++)	{
+						socket.send(sendPkt);
+						}
 				}
 				catch(IOException e) {
 					System.err.println("I/O error while sending datagram:\n" + e);
