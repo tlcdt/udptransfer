@@ -21,20 +21,21 @@ import java.util.concurrent.TimeUnit;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 4500;
+	private static final short ACK_TIMEOUT = 1300;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
+	static final int DEF_CLIENT_CTRL_PORT = 65430;
 	
 	private static final int CORE_POOL_SIZE = 20;
-	private static final int EOB_PRE_SLEEP = 2;
-	private static final int EOB_PRE_DELAY = 130; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 90;
+	private static final int EOB_PRE_SLEEP = 10;//15; attraverso router
+	private static final int EOB_PRE_DELAY = 150; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 20;
 	
-	private static final int NUM_OF_EOBS = 4; // each time we send an EOB, we send it NUM_OF_EOBS times.
+	private static final int NUM_OF_EOBS = 5; // each time we send an EOB, we send it NUM_OF_EOBS times.
 	
-	static final int PKT_SIZE = 640;
-	static final int PKTS_IN_BLOCK = 450;
-	static final int BLOCKS_IN_BUFFER = 32;
+	static final int PKT_SIZE = 896;
+	static final int PKTS_IN_BLOCK = 650;
+	static final int BLOCKS_IN_BUFFER = 15;
 	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
@@ -60,6 +61,7 @@ public class Client
 		InetAddress channelAddr;
 		InetAddress dstAddr;
 		DatagramSocket socket = null;
+		DatagramSocket ctrlSocket = null;
 
 		// Input arguments check
 		if (args.length != 3) {
@@ -67,10 +69,11 @@ public class Client
 			return;
 		}
 
-		// Create socket
+		// Create sockets
 		try {
 			socket = new DatagramSocket(DEF_CLIENT_PORT);
-			socket.setSoTimeout(1);
+			socket.setSoTimeout(1);	// timeout for reception
+			ctrlSocket = new DatagramSocket(DEF_CLIENT_CTRL_PORT);
 		} catch (SocketException e) {
 			System.err.println("Error creating datagram socket:\n" + e);
 			return;
@@ -152,7 +155,7 @@ public class Client
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
 		// Send first BLOCKS all at once. The buffer will be empty after this, and toBeSent will be all-false
-		sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
+		sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, ctrlSocket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
 
 
 
@@ -169,7 +172,7 @@ public class Client
 					Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 					// We get from the cache a copy of the current EOB without SN, to avoid the possibility that the server discards it
 					for (int k = 0; k < NUM_OF_EOBS; k++)
-						sendDatagram(socket, eobAssembler.getFromCache(j));
+						sendDatagram(ctrlSocket, eobAssembler.getFromCache(j));
 					sentEobPkts += NUM_OF_EOBS;
 					// Just sent an EOB: reset the timer
 					eobTimers.restartTimer(j);
@@ -285,7 +288,7 @@ public class Client
 			}
 
 			// Send selected packets from all the blocks in the current window, and at the end of each block send an EOB packet
-			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, ctrlSocket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
 		}
 
 		int numDataPkts = totBytesRead / PKT_SIZE + 1;
@@ -341,6 +344,7 @@ public class Client
 	 * @param bufferedBytes - the actual number of bytes in the buffer. It is generally fixed, but it can be
 	 * any number between 0 and BUFFER_SIZE if the last block is also the last block of the file transfer operation.
 	 * @param socket - the socket on which send and receive operations are performed
+	 * @param ctrlSocket 
 	 * @param channelAddr - IP address of Channel
 	 * @param dstAddr - IP address of the destination (Server)
 	 * @param eobAssembler - this object assembles EOB packets and stores them in a cache that has the size of the window, in order
@@ -349,7 +353,7 @@ public class Client
 	 * @param schedExec - a ScheduledThreadPoolExecutor with a sufficient pool size: its purpose is to send EOB packets asynchronously
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
-			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, EobTimers eobTimers, ScheduledThreadPoolExecutor schedExec) {
+			DatagramSocket socket, DatagramSocket ctrlSocket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, EobTimers eobTimers, ScheduledThreadPoolExecutor schedExec) {
 
 		if (bufferedBytes < 0)	// should never happen, but better safe than sorry
 			return;
@@ -388,6 +392,8 @@ public class Client
 			
 			// Need to send really few packets from this block? Why not send them even more times?
 			int numTxForCurrBlock = getNumTransmissions(numPktsToSend);
+			if (i < numBlocks/4)
+				numTxForCurrBlock *= 4;
 			//Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInBuffer[i] + " (" + numTxForCurrBlock + " times)");
 			for (int j = 0; j < numTxForCurrBlock; j++)
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
@@ -402,7 +408,7 @@ public class Client
 			} catch (InterruptedException e) {}
 			
 			// Send EOB packet asynchronously: see javadoc for the class AsyncRepeatedPacketSender
-			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, NUM_OF_EOBS, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
+			schedExec.schedule(new AsyncRepeatedPacketSender(ctrlSocket, eobPkt, NUM_OF_EOBS, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
 			eobTimers.restartTimer(i); // we are now waiting for an ACK of the current EOB: set the timer
 			
 			sentEobPkts += NUM_OF_EOBS;	// stupid counter
@@ -418,7 +424,7 @@ public class Client
 	
 	private static int getNumTransmissions(int numPktsToSend) {
 		if (numTransmissionsCache[numPktsToSend-1] == 0)
-			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.125 + 2.4)));
+			numTransmissionsCache[numPktsToSend-1] = Math.round((int) Math.ceil(Math.exp(- numPktsToSend * 0.08 + 2.9)));//0.125 + 2.9)));
 		return numTransmissionsCache[numPktsToSend-1];
 	}
 
