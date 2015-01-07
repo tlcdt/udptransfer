@@ -21,19 +21,19 @@ import java.util.concurrent.TimeUnit;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 4000;
+	private static final short ACK_TIMEOUT = 4500;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	
 	private static final int CORE_POOL_SIZE = 20;
-	private static final int EOB_PRE_SLEEP = 10;
-	private static final int EOB_PRE_DELAY = 200; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 150;
+	private static final int EOB_PRE_SLEEP = 2;
+	private static final int EOB_PRE_DELAY = 130; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 90;
 	
 	private static final int NUM_OF_EOBS = 4; // each time we send an EOB, we send it NUM_OF_EOBS times.
 	
 	static final int PKT_SIZE = 640;
-	static final int PKTS_IN_BLOCK = 200;
+	static final int PKTS_IN_BLOCK = 450;
 	static final int BLOCKS_IN_BUFFER = 32;
 	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
@@ -45,7 +45,6 @@ public class Client
 	private static int sentDataPkts = 0;
 	private static int sentEobPkts = 0;
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
-	private static boolean[] pendingEobAck;
 	private static int eob_preSleep = EOB_PRE_SLEEP;
 	
 	/*private static int spaceOutFactor = 1;
@@ -97,7 +96,6 @@ public class Client
 		// Flags
 		boolean[] toBeSent = new boolean[PKTS_IN_BUFFER];	// tells which packets in the window must be sent
 		boolean[] isBlockAcked = new boolean[BLOCKS_IN_BUFFER];
-		pendingEobAck = new boolean[BLOCKS_IN_BUFFER];
 		
 		// Flag to stop execution: it signals the end of transmission
 		boolean theEnd = false;
@@ -134,7 +132,7 @@ public class Client
 		// * * * * * * * * * * * *//
 
 
-		EobTimers eobTimers = new EobTimers(BLOCKS_IN_BUFFER);
+		EobTimers eobTimers = new EobTimers(BLOCKS_IN_BUFFER, ACK_TIMEOUT);
 		
 		// This object's job is to identify EOB ACK packets that have already been received before.
 		// These packets will be dropped, so as to avoid useless retransmission of data packets.
@@ -154,50 +152,37 @@ public class Client
 		Arrays.fill(toBeSent, 0, bufferedPkts, true);
 
 		// Send first BLOCKS all at once. The buffer will be empty after this, and toBeSent will be all-false
-		sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
+		sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
 
 
 
 		/* * Main loop * */
 		
-		// Timer for timeout handling
-		long timerStart = System.currentTimeMillis();
-		long timeout = ACK_TIMEOUT;
-		
 		while(!theEnd) {
 			
+
 			// Handle timeout and retransmit proper EOB if needed
-			if (System.currentTimeMillis() > timerStart + timeout) { //timeout since last sent EOB expired
-				int pendingEobAcks = 0;
-				for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
-					
-					// Re-send EOB packets that have been awaiting ACK for too long
-					if (pendingEobAck[j]) {
-						Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
-						// We get from the cache a copy of the current EOB without SN, to avoid the possibility that the server discards it
-						for (int k = 0; k < NUM_OF_EOBS; k++)
-							sendDatagram(socket, eobAssembler.getFromCache(j));
-						sentEobPkts += NUM_OF_EOBS;
-						// Just sent an EOB: reset the timer
-						eobTimers.reset(j);
-						timerStart = System.currentTimeMillis(); // TODO one timer for each block
-						pendingEobAcks++;
-					}
-				
-				// If we're done even without a FIN, close transmission
-				if (pendingEobAcks == 0) {
-					System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
-					theEnd = true;
-					break;
+			for (int j = 0; j < BLOCKS_IN_BUFFER; j++)
+
+				// Re-send EOB packets that have been awaiting ACK for too long
+				if (eobTimers.hasTimedOut(j)) {
+					Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
+					// We get from the cache a copy of the current EOB without SN, to avoid the possibility that the server discards it
+					for (int k = 0; k < NUM_OF_EOBS; k++)
+						sendDatagram(socket, eobAssembler.getFromCache(j));
+					sentEobPkts += NUM_OF_EOBS;
+					// Just sent an EOB: reset the timer
+					eobTimers.restartTimer(j);
 				}
-				
-				// If we're missing too much stuff maybe there's congestion
-				if (pendingEobAcks > BLOCKS_IN_BUFFER / 2) { // TODO Think about this
-					timeout *= 2;
-				}
+
+			// If we're done even without a FIN, close transmission
+			if (eobTimers.getActiveNumber() == 0) {
+				System.out.println("Timeout: no FIN received, but all data has been ACKed. Exit!");
+				theEnd = true;
+				break;
 			}
 
-			
+
 			// ---- Receive packet ----
 			
 			byte[] recvBuf = new byte[RX_BUFSIZE];
@@ -241,7 +226,6 @@ public class Client
 			// If another copy of this EOB ACK was already received (and processed) before, ignore it!
 			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
 			
-			timerStart = System.currentTimeMillis();
 			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;	// Number of packets of this block that the server hasn't received yet
 			int ackedBn = recvEobAck.endOfBlockAck.bn;	// BN of the block this ACK is referred to
@@ -258,7 +242,7 @@ public class Client
 			int[] missingPkts = recvEobAck.endOfBlockAck.missingSN;
 			int snOffset = (ackedBn - 1) * PKTS_IN_BLOCK + 1;		// SN offset for the BN that was just ACKed		
 			int blockOffset = bnIndexInWindow * PKTS_IN_BLOCK;
-			pendingEobAck[bnIndexInWindow] = false;	// No longer waiting for the EOB ACK for this block
+			eobTimers.disableTimer(bnIndexInWindow);	// No longer waiting for the EOB ACK for this block
 			
 			// If all packets are correctly received, flag the current block as ACKed
 			if (numMissingPkts == 0)
@@ -291,8 +275,8 @@ public class Client
 				if(bytesRead > 0) Utils.logg("Read " + bytesRead + " more bytes from file");
 
 				// Shift and update other entities
-				Utils.shiftArrayLeft(pendingEobAck, 1);
 				eobAssembler.shiftWindow();
+				eobTimers.shiftWindow();
 				Utils.shiftArrayLeft(isBlockAcked, 1);
 				windowLeft++;
 				Utils.shiftArrayLeft(toBeSent, PKTS_IN_BLOCK);
@@ -301,7 +285,7 @@ public class Client
 			}
 
 			// Send selected packets from all the blocks in the current window, and at the end of each block send an EOB packet
-			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, schedExec);
+			sendBlocksAndEobs(txBuffer, toBeSent, windowLeft, bufferedBytes, socket, channelAddr, dstAddr, eobAssembler, eobTimers, schedExec);
 		}
 
 		int numDataPkts = totBytesRead / PKT_SIZE + 1;
@@ -361,10 +345,11 @@ public class Client
 	 * @param dstAddr - IP address of the destination (Server)
 	 * @param eobAssembler - this object assembles EOB packets and stores them in a cache that has the size of the window, in order
 	 * to retransmit them when needed. It must be the same object throughout the whole execution of the program
+	 * @param eobTimers 
 	 * @param schedExec - a ScheduledThreadPoolExecutor with a sufficient pool size: its purpose is to send EOB packets asynchronously
 	 */
 	private static void sendBlocksAndEobs(byte[] txBuffer, boolean[] toBeSent, int windowLeft,int bufferedBytes,
-			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, ScheduledThreadPoolExecutor schedExec) {
+			DatagramSocket socket, InetAddress channelAddr,	InetAddress dstAddr, EobAssembler eobAssembler, EobTimers eobTimers, ScheduledThreadPoolExecutor schedExec) {
 
 		if (bufferedBytes < 0)	// should never happen, but better safe than sorry
 			return;
@@ -418,7 +403,7 @@ public class Client
 			
 			// Send EOB packet asynchronously: see javadoc for the class AsyncRepeatedPacketSender
 			schedExec.schedule(new AsyncRepeatedPacketSender(socket, eobPkt, NUM_OF_EOBS, EOB_INTER_DELAY), EOB_PRE_DELAY, TimeUnit.MILLISECONDS);
-			pendingEobAck[i] = true; // we are now waiting for an ACK of the current EOB
+			eobTimers.restartTimer(i); // we are now waiting for an ACK of the current EOB: set the timer
 			
 			sentEobPkts += NUM_OF_EOBS;	// stupid counter
 		}

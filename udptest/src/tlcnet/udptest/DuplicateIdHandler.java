@@ -7,7 +7,6 @@ public class DuplicateIdHandler {
 	private static final int WNDSHIFT= 4000;
 	public static final int JOLLY = 0;
 	
-	//private int wndSize;
 	private int wndShift;
 	private int left; // left margin
 	private int right;
@@ -25,7 +24,6 @@ public class DuplicateIdHandler {
 	 */
 	public DuplicateIdHandler(int wndSize, int wndShift, int left) {
 		super();
-		//this.wndSize = wndSize;
 		this.wndShift = wndShift;
 		this.left = left;
 		right = left + wndSize;
