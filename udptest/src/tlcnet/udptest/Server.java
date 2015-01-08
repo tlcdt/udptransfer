@@ -9,9 +9,7 @@ import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 
-/* TODO: What if the Server starts listening after the Client has started transmitting?
- * The first received pkt has SN > 1.
- * Should we consider this an error and abort?
+/* TODO: Gestire il caso in cui ricevo il fin ma mi mancano ancora alcuni pacchetti nel buffer
  */
 
 
@@ -95,6 +93,9 @@ public class Server {
 		int firstFalse = 0;
 		int snFIN = 0;
 		int snFINWind = 0;
+		int FinLength = 0;
+		byte[] FinPayl = new byte[BLOCK_SIZE];
+		int n = 0;
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
@@ -158,15 +159,21 @@ public class Server {
 				Ack  = Translation(Ack, firstFalse, window_size);
 				new_window = false;
 				notAllAcked = false;
+				
+				
+				if (snFIN != 0)	{
+					snFINWind = snFIN- firstSnWind;
 				}
 				
-			
 			}
-			
+			}
 			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN )	{		//received the FIN packet
-				gotFIN = true;
+				//gotFIN = true;
 				snFIN = recvUTPpkt.sn;
 				snFINWind = snFIN - firstSnWind;
+				FinLength = recvUTPpkt.payl.length;
+				FinPayl = recvUTPpkt.payl;
+				
 				
 			}
 				
@@ -184,13 +191,13 @@ public class Server {
 				System.out.println("lastSnWind Server:" + lastSnWind);
 				System.out.println("DataBuffer length: " + DataBuffer.length);
 				System.out.println("Window size: " + window_size);
-				if(gotFIN) System.out.println("IT'S A FIN!!!!!!! :-)");
+				if(snFIN != 0) System.out.println("IT'S A FIN!!!!!!! :-)");
 				System.out.println("----------------------------------------");
 				System.out.println("");
 				
 				
 				//copy data in the cell of the buffer array with the right index
-				if(recvUTPpkt.sn >= firstSnWind && lastSnWind == recvUTPpkt.lastSnInWindow){
+				if(recvUTPpkt.sn >= firstSnWind && lastSnWind <= recvUTPpkt.lastSnInWindow){
 				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
 				}
 				catch (ArrayIndexOutOfBoundsException e)	{
@@ -234,14 +241,14 @@ public class Server {
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 			sendUTPpkt.lastSnInWindow = lastSnWind;
 			sendUTPpkt.payl = new byte[0];
-			if(gotFIN && FirstFalse(Ack)== (snFINWind + 1))	{						//TODO: aggiungere la condizione se ho ricevuto tutti i pacchetti prima del fin
+			if(gotFIN && FirstFalse(Ack)== (snFINWind + 1))	{						
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
-				gotFIN = true;
+				//gotFIN = true;
 			}
 			else
 			{
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
-				gotFIN = false;
+				//gotFIN = false;
 				}
 			
 			System.out.println("ACK ARRAY: " + Integer.toBinaryString(sendUTPpkt.sn));
@@ -257,14 +264,30 @@ public class Server {
 			//----------if ALL TRUE = true, proceed in the standard manner------------
 			if(allTrue)	{
 			
-			for(int i = 0; i < window_size ; i++)	{
+				int last = window_size;
+				 
+				if (snFIN != 0)	{
+					
+					last = window_size - 1;
+					
+				}
+				
+	
+				
+			for(int i = 0; i < last ; i++)	{
 				try	{
 					writeBuffer.write(DataBuffer[i]);
+					n++;
+					System.out.println("Writed: " + n);
+					System.out.println("----------------------------------------");
+					System.out.println("");
 				}
 				catch(IOException e)	{
 					System.out.println("Error while putting data back together");
 				}
-	
+				
+				
+				
 	
 				// If the buffer is too large, write it on file (append) and empty it.
 				if (writeBuffer.size() > WRITEBUF_THRESH) {				//Is useful?
@@ -273,11 +296,25 @@ public class Server {
 
 
 			}
+			if (snFIN != 0)	{				
+				try	{
+					writeBuffer.write(FinPayl);
+					System.out.println("Writed the FIN payload 1. " + n);
+					System.out.println("----------------------------------------");
+					System.out.println("");
+					n++;
+				}
+				catch(IOException e)	{
+					System.out.println("Error while putting data back together");
+				}
+			gotFIN = true;
+			
+			}
 
 			// --- Send ACK---
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 			try{
-				for(int i = 0; i<3; i++)	{
+				for(int j = 0; j<3; j++)	{
 				socket.send(sendPkt);
 				}
 			}
@@ -299,15 +336,39 @@ public class Server {
 			
 			firstFalse = FirstFalse(Ack);
 			
-			for(int i = 0; i < firstFalse ; i++)	{
+			int last = firstFalse;
+			 
+			//TODO:Devo controllare che abbia ricevuto tutti i pacchetti fino a quello del fin
+			if(snFIN != 0 && areAllTrue2(Ack, snFINWind))
+				last = snFINWind - 1;
+			
+			for(int i = 0; i < last ; i++)	{
 				try	{
 					writeBuffer.write(DataBuffer[i]);
+					n++;
+					System.out.println("Writed: " + n);
+					System.out.println("----------------------------------------");
+					System.out.println("");
 				}
 				catch(IOException e)	{
 					System.out.println("Error while putting data back together");
 				}
 	
-	
+			}
+				if (snFIN != 0 && areAllTrue2(Ack, snFINWind))	{
+					
+					try	{
+						writeBuffer.write(FinPayl);
+						System.out.println("Writed the FIN payload 2. " + n);
+						System.out.println("----------------------------------------");
+						System.out.println("");
+						n++;
+					}
+					catch(IOException e)	{
+						System.out.println("Error while putting data back together");
+					}
+					gotFIN = true;
+				}
 				// If the buffer is too large, write it on file (append) and empty it.
 				if (writeBuffer.size() > WRITEBUF_THRESH) {
 					writeBufferToFile(writeBuffer, fileOutputStream);
@@ -324,7 +385,7 @@ public class Server {
 					System.err.println("I/O error while sending datagram:\n" + e);
 					socket.close(); System.exit(-1);
 				}
-			}
+			
 		
 			notAllAcked = true;
 			
@@ -369,6 +430,13 @@ public class Server {
 	public static boolean areAllTrue(boolean[] array)
 	{
 	    for(boolean b : array) if(!b) return false;
+	    return true;
+	}
+	
+	public static boolean areAllTrue2(boolean[] array, int pos)
+	{	
+		
+	    for(int i = 0; i < pos; i++) if (!array[i]) return false;
 	    return true;
 	}
 
