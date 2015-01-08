@@ -88,6 +88,7 @@ public class Client
 		int lastSnInWindow = 0;
 		boolean resending = false;
 		boolean rep = false;
+		int ackSlide = 0;
 		
 		while(mustSend)	{
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
@@ -137,7 +138,11 @@ public class Client
 							firstDroppedPck = true;
 							offset = i;					
 						}
-						lastSnInWindow = sn - 1 + offset;
+						if(lastSn == 0)
+							lastSnInWindow = sn - 1 + offset;
+						else	{
+							sn = lastSnInWindow + 1;
+						}
 						
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
@@ -162,6 +167,7 @@ public class Client
 					}
 				}
 				
+				ackSlide = offset;
 				
 				// ---- Slide the window if possible ----
 				
@@ -199,11 +205,13 @@ public class Client
 						first = sec;
 						sec = fill(sec, chunkContainer, inChannel);
 						//Case 3: Ok, now we can slide without any problems
-						//System.out.println("LENGTH OF SECOND ARRAY after sliding = " + sec.length);
-						if( (offset*BLOCK_SIZE) - (first.length - end - BLOCK_SIZE) <= sec.length)	{
+						System.out.println("LENGTH OF SECOND ARRAY after sliding = " + sec.length + " pcksInFirst = " + pcksInFirst + " end = " + end + " offset = " + offset);
+						if(( (offset*BLOCK_SIZE) - (first.length - end - BLOCK_SIZE) <= sec.length) || (begin == 0 && offset == WINDOW_SIZE))	{
 							begin = (offset - pcksInFirst)*BLOCK_SIZE;
-							if(begin == 0)
+							if(begin == 0)	{
 								end = (WINDOW_SIZE -1)*BLOCK_SIZE;
+								System.out.println("END " + end);
+							}
 							else	
 								end = begin - BLOCK_SIZE;
 							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
@@ -212,6 +220,7 @@ public class Client
 						//Case 4: Oh, man...sec array is shorter than usual and we cannot slide so much. This is the last window!
 						//We slide as much as we can
 						else if(sec.length != 0 && sec.length < BLOCK_SIZE*WINDOW_SIZE)	{
+							
 							if(sec.length%BLOCK_SIZE != 0)	{
 								end = (sec.length/BLOCK_SIZE)*BLOCK_SIZE;
 								begin = end + BLOCK_SIZE;
@@ -225,6 +234,7 @@ public class Client
 							lastSn = sn - 1 + offset;
 							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
 							slide = true;
+							System.out.println("END IS " + end);
 						}
 						//Case 5: sec.length is equal to 0!
 						else	{
@@ -241,9 +251,9 @@ public class Client
 			}
 			// ---- Fix the old "ack" string to be consistent with the slide
 			if(slide)	{
-				//System.out.println("Problems? offset = " + offset + end);
-				String zeros = Utils.AckToBinaryString(0, offset);
-				ack = ack.substring(offset) + zeros;
+				System.out.println("Problems? offset = " + offset + " end = " + end + ", and ackSlide = " + ackSlide);
+				String zeros = Utils.AckToBinaryString(0, ackSlide);
+				ack = ack.substring(ackSlide) + zeros;
 			}
 			
 			
@@ -285,6 +295,8 @@ public class Client
 			long ack_start = System.currentTimeMillis();
 			int countOnes = 0;
 			boolean keepTrying = true;
+			boolean receivedSomething = false;
+			int recSn = 0;
 			//System.out.println("Il timer è a " + ack_start);
 			while(keepTrying && System.currentTimeMillis() - ack_start < 2000)	{
 				
@@ -305,31 +317,28 @@ public class Client
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
 				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
-					System.out.println("Ok, the ack should be received now........");
+					//System.out.println("Ok, the ack should be received now........");
 					if(!rep)	{			//this window hasn't already been sent
-						System.out.println("Ok, the ack should be received now...");
 						keepTrying = false;
 					}
 					else if(recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.sn > countOnes)	{		//The packet with the most acks wins
 						countOnes = recvUTPpkt.sn;
 						ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class
 					}
-					// ---- Process received ack: put it in binary string form ----
 					
-					//Debug
-					System.out.println("ACK n. " + segmentCounter + ": " + ack);
-					
-					if(lastSn != 0 && recvUTPpkt.sn == (int) Math.pow(2, WINDOW_SIZE) - 1)	{		//It means that everything was acked
-						mustSend = false;
-						System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + startTransferTime/1000 + " seconds.");
-					}
 				}
 			}
 			if(keepTrying && countOnes == 0)	{
 				System.out.println("Couldn't receive any ack for segment " + segmentCounter + "...resending.");
-				ack = Utils.AckToBinaryString(0, WINDOW_SIZE);
+				//if(!rep && lastSn == 0)
+					//ack = Utils.AckToBinaryString(0, WINDOW_SIZE);
 				rep = true;
 				resending = true;
+			}
+			else	{
+				receivedSomething = true;
+				System.out.println("keepTrying = " + keepTrying + " and countOnes = " + countOnes + ".So...this is the ack");
+				System.out.println("ACK n. " + segmentCounter + ": " + ack);
 			}
 
 			//Note next if-clause: it's needed because lastSnInWindow field may be wrong if last window is forced to be smaller 
@@ -337,14 +346,19 @@ public class Client
 			//we don't know if we'll have more packets to send or not. So when we reach last packet, we take care of the received
 			//ack, fixing it.
 				
-			if(ack.substring(0, 1).equals("0"))
+			if(ack.substring(0, 1).equals("0") || lastSn != 0)
 				rep = true;
 			else
 				rep = false;
 			if(lastSn != 0 && lastSnInWindow != lastSn)	{
 				int digits = (lastSnInWindow - lastSn);
 				String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
-				ack = ones + ack.substring(0, WINDOW_SIZE - digits);
+				ack = ack.substring(0, WINDOW_SIZE - digits) + ones;
+			}
+
+			if(lastSn != 0 && ack.equals(Utils.AckToBinaryString((int) Math.pow(2, WINDOW_SIZE) - 1, WINDOW_SIZE)))	{		//It means that everything was acked
+				mustSend = false;
+				System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + (System.currentTimeMillis() - startTransferTime)/1000 + " seconds.");
 			}
 			
 		}
@@ -388,7 +402,7 @@ public class Client
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 		//----DEBUG----
-		System.out.println("/n--DEBUG--/nLast sn in window è " + lastSnInWindow + "; il SN è " + sn);
+		System.out.println("/n--DEBUG--/nLast sn in window is " + lastSnInWindow + "; SN is " + sn);
 		if(lastSnInWindow - sn < 0)
 			System.out.println("ERRORE!! CONTROLLARE L'AGGIORNAMENTO DI LASTSNINW.");
 		try {
