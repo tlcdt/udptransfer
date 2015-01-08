@@ -88,6 +88,7 @@ public class Client
 		int lastSnInWindow = 0;
 		boolean resending = false;
 		boolean rep = false;
+		int ackSlide = 0;
 		
 		while(mustSend)	{
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
@@ -166,6 +167,7 @@ public class Client
 					}
 				}
 				
+				ackSlide = offset;
 				
 				// ---- Slide the window if possible ----
 				
@@ -249,9 +251,9 @@ public class Client
 			}
 			// ---- Fix the old "ack" string to be consistent with the slide
 			if(slide)	{
-				System.out.println("Problems? offset = " + offset + end);
-				String zeros = Utils.AckToBinaryString(0, offset);
-				ack = ack.substring(offset) + zeros;
+				System.out.println("Problems? offset = " + offset + " end = " + end + ", and ackSlide = " + ackSlide);
+				String zeros = Utils.AckToBinaryString(0, ackSlide);
+				ack = ack.substring(ackSlide) + zeros;
 			}
 			
 			
@@ -335,7 +337,7 @@ public class Client
 			}
 			else	{
 				receivedSomething = true;
-				System.out.println("So...this is the ack");
+				System.out.println("keepTrying = " + keepTrying + " and countOnes = " + countOnes + ".So...this is the ack");
 				System.out.println("ACK n. " + segmentCounter + ": " + ack);
 			}
 
@@ -400,7 +402,7 @@ public class Client
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 		//----DEBUG----
-		System.out.println("/n--DEBUG--/nLast sn in window è " + lastSnInWindow + "; il SN è " + sn);
+		System.out.println("/n--DEBUG--/nLast sn in window is " + lastSnInWindow + "; SN is " + sn);
 		if(lastSnInWindow - sn < 0)
 			System.out.println("ERRORE!! CONTROLLARE L'AGGIORNAMENTO DI LASTSNINW.");
 		try {
