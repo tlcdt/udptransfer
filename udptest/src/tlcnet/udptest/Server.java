@@ -233,7 +233,7 @@ public class Server {
 				
 				// -- Assemble and send EOB_ACK
 
-				int numOfEobAckTx = 20;//missingSN.length / 50 + 3;
+				int numOfEobAckTx = 8;//missingSN.length / 50 + 3;
 				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
 				for (int k = 0; k < numOfEobAckTx; k++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);

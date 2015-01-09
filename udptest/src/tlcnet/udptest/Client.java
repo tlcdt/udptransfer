@@ -21,21 +21,21 @@ import java.util.concurrent.TimeUnit;
 public class Client
 {
 	private static final int RX_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	private static final short ACK_TIMEOUT = 1300;
+	private static final short ACK_TIMEOUT = 1800;
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int DEF_CLIENT_CTRL_PORT = 65430;
 	
 	private static final int CORE_POOL_SIZE = 20;
-	private static final int EOB_PRE_SLEEP = 10;//15; attraverso router
-	private static final int EOB_PRE_DELAY = 150; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
-	private static final int EOB_INTER_DELAY = 20;
+	private static final int EOB_PRE_SLEEP = 0;//15; attraverso router
+	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_INTER_DELAY = 50;
 	
 	private static final int NUM_OF_EOBS = 5; // each time we send an EOB, we send it NUM_OF_EOBS times.
 	
 	static final int PKT_SIZE = 896;
-	static final int PKTS_IN_BLOCK = 650;
-	static final int BLOCKS_IN_BUFFER = 15;
+	static final int PKTS_IN_BLOCK = 512;
+	static final int BLOCKS_IN_BUFFER = 80;
 	static final int BUFFER_SIZE = PKT_SIZE * PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
@@ -47,6 +47,8 @@ public class Client
 	private static int sentEobPkts = 0;
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	private static int eob_preSleep = EOB_PRE_SLEEP;
+	
+	private static int packetsThresh = PKTS_IN_BLOCK * 2;
 	
 	/*private static int spaceOutFactor = 1;
 	private static final int SPACE_OUT_DELAY = 50;*/
@@ -229,7 +231,7 @@ public class Client
 			// If another copy of this EOB ACK was already received (and processed) before, ignore it!
 			if (!dupEobHandler.isNew(recvEobAck.sn)) continue;
 			
-			Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
+			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;	// Number of packets of this block that the server hasn't received yet
 			int ackedBn = recvEobAck.endOfBlockAck.bn;	// BN of the block this ACK is referred to
 			
@@ -275,7 +277,7 @@ public class Client
 				bufferedBytes -= BYTES_IN_BLOCK;
 				bufferedBytes += bytesRead;
 				int newPkts = Math.min(PKTS_IN_BLOCK, bytesRead / PKT_SIZE + 1);
-				if(bytesRead > 0) Utils.logg("Read " + bytesRead + " more bytes from file");
+				//if(bytesRead > 0) Utils.logg("Read " + bytesRead + " more bytes from file");
 
 				// Shift and update other entities
 				eobAssembler.shiftWindow();
@@ -358,6 +360,8 @@ public class Client
 		if (bufferedBytes < 0)	// should never happen, but better safe than sorry
 			return;
 		
+		int sentInThisSession = 0;
+		
 		int numBlocks = bufferedBytes / BYTES_IN_BLOCK + 1;		// n. of blocks actually stored in the buffer
 		int bytesInLastBlock = bufferedBytes % BYTES_IN_BLOCK;	// bytes of data in the last block stored in the buffer
 		if (numBlocks > BLOCKS_IN_BUFFER && bytesInLastBlock == 0) {
@@ -365,7 +369,7 @@ public class Client
 			bytesInLastBlock = BYTES_IN_BLOCK;
 		}
 		
-		for (int i = 0; i < numBlocks; i++) {
+		for (int i = 0; i < numBlocks && sentInThisSession < packetsThresh; i++) {
 			int bytesInThisBlock = BYTES_IN_BLOCK;
 			if (i == numBlocks - 1)	// if this is the last block actually stored in the buffer...
 				bytesInThisBlock = bytesInLastBlock; // ...set the correct value to bytesInThisBlock
@@ -392,12 +396,14 @@ public class Client
 			
 			// Need to send really few packets from this block? Why not send them even more times?
 			int numTxForCurrBlock = getNumTransmissions(numPktsToSend);
-			if (i < numBlocks/4)
-				numTxForCurrBlock *= 4;
-			//Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInBuffer[i] + " (" + numTxForCurrBlock + " times)");
+			if (i < numBlocks/8)
+				numTxForCurrBlock *= 3;
+			Utils.logg("- Sending " + Utils.count(toBeSent_thisBlock, true) + " packets from BN=" + bnInWindow(i, windowLeft) + " (" + numTxForCurrBlock + " times)");
 			for (int j = 0; j < numTxForCurrBlock; j++)
 				sendSpecificDataPkts(txBuf_thisBlock, toBeSent_thisBlock, bnInWindow(i, windowLeft), socket, channelAddr, dstAddr);
 
+			sentInThisSession += numPktsToSend;
+			
 			// Prepare EOB packet (eobAssembler will store it in an SN-less form in its cache)
 			DatagramPacket eobPkt = eobAssembler.assembleEobDatagram(bnInWindow(i, windowLeft), numPktsInThisBlock);
 			
@@ -412,10 +418,10 @@ public class Client
 			eobTimers.restartTimer(i); // we are now waiting for an ACK of the current EOB: set the timer
 			
 			sentEobPkts += NUM_OF_EOBS;	// stupid counter
-		}
-		
-		// Updates toBeSent array to specify that there are no pending packets to be sent
-		Arrays.fill(toBeSent, 0, toBeSent.length, false);
+				
+			// Updates toBeSent array to specify that there are no pending packets to be sent
+			Arrays.fill(toBeSent, PKTS_IN_BLOCK * i, PKTS_IN_BLOCK * (i + 1), false);
+		}		
 	}
 
 
