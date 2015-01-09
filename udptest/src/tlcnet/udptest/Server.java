@@ -150,10 +150,10 @@ public class Server {
 			
 			else if(notAllAcked){
 					
-				if (recvUTPpkt.lastSnInWindow > lastSnWind){
+				
 				//window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
 				firstSnWind = firstSnWind + firstFalse;							
-				lastSnWind = recvUTPpkt.lastSnInWindow;
+				lastSnWind = firstSnWind + window_size - 1;
 				startTransferTime = System.currentTimeMillis();			//start the timer
 				DataBuffer = Translation(DataBuffer, firstFalse, window_size, BLOCK_SIZE);//translate the buffer
 				Ack  = Translation(Ack, firstFalse, window_size);
@@ -165,7 +165,7 @@ public class Server {
 					snFINWind = snFIN- firstSnWind;
 				}
 				
-			}
+			
 			}
 			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN )	{		//received the FIN packet
 				//gotFIN = true;
@@ -173,7 +173,8 @@ public class Server {
 				snFINWind = snFIN - firstSnWind;
 				FinLength = recvUTPpkt.payl.length;
 				FinPayl = recvUTPpkt.payl;
-				
+				System.out.println("FinPayl length: " + FinPayl.length);
+				System.out.println("payl.length: " + recvUTPpkt.payl.length);
 				
 			}
 				
@@ -191,13 +192,16 @@ public class Server {
 				System.out.println("lastSnWind Server:" + lastSnWind);
 				System.out.println("DataBuffer length: " + DataBuffer.length);
 				System.out.println("Window size: " + window_size);
+				System.out.println("snFIN: " + snFIN);
+				System.out.println("snFINWind: " + snFINWind);
+				System.out.println("FinPayl length: " + FinLength);
 				if(snFIN != 0) System.out.println("IT'S A FIN!!!!!!! :-)");
 				System.out.println("----------------------------------------");
 				System.out.println("");
 				
 				
 				//copy data in the cell of the buffer array with the right index
-				if(recvUTPpkt.sn >= firstSnWind && lastSnWind <= recvUTPpkt.lastSnInWindow){
+				if(recvUTPpkt.sn >= firstSnWind){
 				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
 				}
 				catch (ArrayIndexOutOfBoundsException e)	{
@@ -251,7 +255,7 @@ public class Server {
 				//gotFIN = false;
 				}
 			
-			System.out.println("ACK ARRAY: " + Integer.toBinaryString(sendUTPpkt.sn));
+			System.out.println("ACK ARRAY: " + Utils.AckToBinaryString(sendUTPpkt.sn, window_size));
 			System.out.println("----------------------------------------");
 			System.out.println("");
 			
@@ -278,7 +282,8 @@ public class Server {
 				try	{
 					writeBuffer.write(DataBuffer[i]);
 					n++;
-					System.out.println("Writed: " + n);
+					System.out.println("Writed1: " + n);
+					System.out.println("last1: " + last);
 					System.out.println("----------------------------------------");
 					System.out.println("");
 				}
@@ -297,16 +302,19 @@ public class Server {
 
 			}
 			if (snFIN != 0)	{				
-				try	{
-					writeBuffer.write(FinPayl);
+				//try	{
+					writeBuffer.write(FinPayl, 0, FinLength);
+					n++;
 					System.out.println("Writed the FIN payload 1. " + n);
+					System.out.println("last1: " + last);
+					System.out.println("Finlength: " + FinLength);
 					System.out.println("----------------------------------------");
 					System.out.println("");
-					n++;
-				}
+					
+				/*}
 				catch(IOException e)	{
 					System.out.println("Error while putting data back together");
-				}
+				}*/
 			gotFIN = true;
 			
 			}
@@ -340,13 +348,14 @@ public class Server {
 			 
 			//TODO:Devo controllare che abbia ricevuto tutti i pacchetti fino a quello del fin
 			if(snFIN != 0 && areAllTrue2(Ack, snFINWind))
-				last = snFINWind - 1;
+				last = snFINWind;
 			
 			for(int i = 0; i < last ; i++)	{
 				try	{
 					writeBuffer.write(DataBuffer[i]);
 					n++;
-					System.out.println("Writed: " + n);
+					System.out.println("Writed2: " + n);
+					System.out.println("last2: " + last);
 					System.out.println("----------------------------------------");
 					System.out.println("");
 				}
@@ -357,16 +366,18 @@ public class Server {
 			}
 				if (snFIN != 0 && areAllTrue2(Ack, snFINWind))	{
 					
-					try	{
-						writeBuffer.write(FinPayl);
+					//try	{
+						writeBuffer.write(FinPayl, 0, FinLength);
+						n++;
 						System.out.println("Writed the FIN payload 2. " + n);
+						System.out.println("last2: " + last);
+						System.out.println("Finlength: " + FinLength);
 						System.out.println("----------------------------------------");
 						System.out.println("");
-						n++;
-					}
+					/*}
 					catch(IOException e)	{
 						System.out.println("Error while putting data back together");
-					}
+					}*/
 					gotFIN = true;
 				}
 				// If the buffer is too large, write it on file (append) and empty it.
