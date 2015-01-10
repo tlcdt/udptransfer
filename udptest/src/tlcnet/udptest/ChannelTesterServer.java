@@ -7,16 +7,12 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.Arrays;
 
-// TODO: What if the Server starts listening after the Client has started transmitting?
-
 
 public class ChannelTesterServer {
 
 	static final int DEF_CHANNEL_PORT = 65432;
 	static final int DEF_SERVER_PORT = 65433;
 	private static final int RX_PKT_BUFSIZE = 2048; // Exceeding data will be discarded: note that such a datagram would be fragmented by IP
-	
-	static final int PKT_SIZE = ChannelTesterClient.PKT_SIZE;
 
 	private static int listenPort = DEF_SERVER_PORT;
 
@@ -33,9 +29,17 @@ public class ChannelTesterServer {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
 		}
+		
+		// Input arguments check
+		if (args.length != 1) {
+			System.out.println("Usage: java ChannelTesterServer <num pkts>"); 
+			return;
+		}
+
+		int numPkts = Integer.parseInt(args[0]);
 
 		
-		long[] rxTime = new long[ChannelTesterClient.NUMPKTS];
+		long[] rxTime = new long[numPkts];
 		boolean loop = true;
 		
 
@@ -68,7 +72,7 @@ public class ChannelTesterServer {
 			}
 		}
 		
-		for(int i = 0; i < ChannelTesterClient.NUMPKTS; i++)
+		for(int i = 0; i < numPkts; i++)
 			System.out.println(rxTime[i]);
 	}
 
