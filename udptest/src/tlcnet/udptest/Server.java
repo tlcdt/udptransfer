@@ -84,7 +84,7 @@ public class Server {
 		int lastSnWind = 0;
 		int firstSnWind = 1;			//first sn in the current window
 		int SN = 1;						//is useless
-		int window_size = 10;
+		int window_size = 20;
 		byte[][] DataBuffer = new byte[window_size][BLOCK_SIZE];			//data buffer while receiving the window's packets 
 		boolean[] Ack = new boolean[window_size];
 		long startTransferTime = System.currentTimeMillis();				//
@@ -96,6 +96,10 @@ public class Server {
 		int FinLength = 0;
 		byte[] FinPayl = new byte[BLOCK_SIZE];
 		int n = 0;
+		int countOld = 0;
+		int oldSn = 0;
+		boolean first = true;
+		int lastFinSn = 0;
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
@@ -142,6 +146,7 @@ public class Server {
 				startTransferTime = System.currentTimeMillis();			//start the timer
 				DataBuffer = new byte [window_size][BLOCK_SIZE];
 				Ack = new boolean[window_size];
+				countOld = 0;
 				
 				new_window = false;
 			}	
@@ -159,15 +164,66 @@ public class Server {
 				Ack  = Translation(Ack, firstFalse, window_size);
 				new_window = false;
 				notAllAcked = false;
+				countOld = 0;
 				
 				
 				if (snFIN != 0)	{
 					snFINWind = snFIN- firstSnWind;
+					lastFinSn = recvUTPpkt.lastSnInWindow;
 				}
+				
 				
 			
 			}
-			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN )	{		//received the FIN packet
+			
+			if (recvUTPpkt.lastSnInWindow < lastSnWind){
+				countOld++;
+				oldSn = recvUTPpkt.lastSnInWindow;
+			}
+			
+			if (countOld > 2){
+				boolean[] oldAck = new boolean[window_size];
+				
+				//--------------create oldAck-------------
+				for(int i = 0; i < (lastSnWind - oldSn); i++)	{
+					oldAck[i] = true;
+				}
+				
+				for(int j = lastSnWind - oldSn; j < window_size; j++)	{
+					oldAck[j] = Ack[j - (lastSnWind - oldSn)];
+					
+				}
+				
+				//create the oldAck pkt
+				UTPpacket sendUTPpkt = new UTPpacket();
+				sendUTPpkt.dstAddr = clientAddr;
+				sendUTPpkt.dstPort = (short) clientPort;
+				sendUTPpkt.sn = booleansToInt(oldAck);			//WARNING: check this method with the client
+				sendUTPpkt.lastSnInWindow = oldSn;
+				sendUTPpkt.payl = new byte[0];
+				
+				byte[] sendData = sendUTPpkt.getRawData();
+				//send the ack 
+				DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
+				try{
+					for(int j = 0; j<10; j++)	{
+					socket.send(sendPkt);
+					
+					}
+				}
+				catch(IOException e) {
+					System.err.println("I/O error while sending datagram:\n" + e);
+					socket.close(); System.exit(-1);
+				}
+				System.out.println("Sent oldAck " + sendUTPpkt.lastSnInWindow);
+				System.out.println("Ack string " + sendUTPpkt.sn);
+				System.out.println("----------------------------------------");
+				System.out.println("");
+			}
+			
+			
+			
+			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN && first)	{		//received the FIN packet
 				//gotFIN = true;
 				snFIN = recvUTPpkt.sn;
 				snFINWind = snFIN - firstSnWind;
@@ -175,7 +231,7 @@ public class Server {
 				FinPayl = recvUTPpkt.payl;
 				System.out.println("FinPayl length: " + FinPayl.length);
 				System.out.println("payl.length: " + recvUTPpkt.payl.length);
-				
+				first = false;
 			}
 				
 				
@@ -195,6 +251,7 @@ public class Server {
 				System.out.println("snFIN: " + snFIN);
 				System.out.println("snFINWind: " + snFINWind);
 				System.out.println("FinPayl length: " + FinLength);
+				System.out.println("CountOld: " + countOld);
 				if(snFIN != 0) System.out.println("IT'S A FIN!!!!!!! :-)");
 				System.out.println("----------------------------------------");
 				System.out.println("");
@@ -245,7 +302,7 @@ public class Server {
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 			sendUTPpkt.lastSnInWindow = lastSnWind;
 			sendUTPpkt.payl = new byte[0];
-			if(gotFIN && FirstFalse(Ack)== (snFINWind + 1))	{						
+			if(snFIN != 0 && FirstFalse(Ack)== (snFINWind + 1))	{						
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
 				//gotFIN = true;
 			}
@@ -322,7 +379,7 @@ public class Server {
 			// --- Send ACK---
 			DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 			try{
-				for(int j = 0; j<3; j++)	{
+				for(int j = 0; j<10; j++)	{
 				socket.send(sendPkt);
 				}
 			}
@@ -388,7 +445,7 @@ public class Server {
 				// --- Send ACK---
 				DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
 				try{
-					for(int j = 0; j<3; j++)	{
+					for(int j = 0; j<10; j++)	{
 						socket.send(sendPkt);
 						}
 				}
@@ -406,11 +463,48 @@ public class Server {
 		}
 		System.out.println("Bye bye, Client! ;-)");
 
-
-
-
 		// Write the remaining data in the buffer to the file
-		writeBufferToFile(writeBuffer, fileOutputStream);
+				writeBufferToFile(writeBuffer, fileOutputStream);
+		/*
+		boolean[] finAck = new boolean[window_size];
+		
+		//--------------create finAck-------------
+		for(int i = 0; i < (lastSnWind - lastFinSn); i++)	{
+			finAck[i] = true;
+		}
+		
+		for(int j = lastSnWind - lastFinSn; j < window_size; j++)	{
+			finAck[j] = Ack[j - (lastSnWind - lastFinSn)];
+			
+		}
+		
+		//create the last pkt
+		UTPpacket sendUTPpkt = new UTPpacket();
+		sendUTPpkt.dstAddr = clientAddr;
+		sendUTPpkt.dstPort = (short) clientPort;
+		sendUTPpkt.sn = booleansToInt(finAck);			//WARNING: check this method with the client
+		sendUTPpkt.lastSnInWindow = lastFinSn;
+		sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
+		sendUTPpkt.payl = new byte[0];
+		
+		byte[] sendData = sendUTPpkt.getRawData();
+		//send the ack 
+		DatagramPacket sendPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);  
+		try{
+			for(int j = 0; j<10; j++)	{
+			socket.send(sendPkt);
+			
+			}
+		}
+		catch(IOException e) {
+			System.err.println("I/O error while sending datagram:\n" + e);
+			socket.close(); System.exit(-1);
+		}
+	
+	*/
+
+
+		
 
 	}
 
@@ -484,4 +578,6 @@ public class Server {
 		}
 		return arraytemp;
 	}
+	
+	
 }
