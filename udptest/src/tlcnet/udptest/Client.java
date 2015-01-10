@@ -89,6 +89,7 @@ public class Client
 		boolean resending = false;
 		boolean rep = false;
 		int ackSlide = 0;
+		boolean pcksInFirstFixer = true;
 		
 		while(mustSend)	{
 			int offset = 0; 							//it's the entity of the window-slide measured in packets
@@ -130,6 +131,18 @@ public class Client
 						offset = WINDOW_SIZE;
 						lastSnInWindow = sn - 1 + offset;
 					}
+				if(lastSn != 0 && pcksInFirstFixer)	{
+					if(pcksInFirst - (lastSnInWindow - lastSn) <= 0)	{
+						first = sec; 	//Points to sec array
+						begin = (lastSnInWindow - lastSn) - pcksInFirst;
+						pcksInFirst = 10;			//Maximize
+					}
+					else	{
+						pcksInFirst = pcksInFirst - (lastSnInWindow - lastSn);
+					begin = begin + (lastSnInWindow - lastSn);
+					}
+					pcksInFirstFixer = false;
+				}
 				boolean firstDroppedPck = false;
 				for(int i = 0; i < ack.length(); i++)	{
 					
@@ -142,10 +155,12 @@ public class Client
 							lastSnInWindow = sn - 1 + offset;
 						else	{
 							sn = lastSnInWindow + 1;
+							System.out.println("lastSn = " + lastSn + " pcksInFirst = " + pcksInFirst + "i = " + i);
 						}
 						
 						// ---- Re-send the dropped pcks ----
 						if(i < pcksInFirst)	{		   				//Are they in first byte array?...
+							
 							int pck_size = BLOCK_SIZE;
 							if((i*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && first.length%BLOCK_SIZE != 0)	{
 								pck_size = first.length%BLOCK_SIZE;
@@ -157,8 +172,10 @@ public class Client
 						else	{									//...or in second byte array?
 							int index = i - pcksInFirst;
 							int pck_size = BLOCK_SIZE;
+							//System.out.println("end is " + end + "sec.length is " + sec.length + " index is " + index);
 							if((index*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && sec.length%BLOCK_SIZE != 0)	{
 								pck_size = sec.length%BLOCK_SIZE;
+								System.out.println("shorter packet!! length is " + pck_size);
 							}
 							byte[] temp = new byte[pck_size]; 
 							System.arraycopy(sec, index*BLOCK_SIZE, temp, 0, pck_size);
@@ -202,7 +219,9 @@ public class Client
 					}
 					//Oh, we must read new bytes from chunkContainer!
 					else if(sec.length == BLOCK_SIZE*WINDOW_SIZE)	{
-						first = sec;
+						System.arraycopy(sec, 0, first, 0, WINDOW_SIZE*BLOCK_SIZE);
+						//String p = new String(first, "UTF-8");
+						//System.out.println(p);
 						sec = fill(sec, chunkContainer, inChannel);
 						//Case 3: Ok, now we can slide without any problems
 						System.out.println("LENGTH OF SECOND ARRAY after sliding = " + sec.length + " pcksInFirst = " + pcksInFirst + " end = " + end + " offset = " + offset);
@@ -212,8 +231,9 @@ public class Client
 								end = (WINDOW_SIZE -1)*BLOCK_SIZE;
 								System.out.println("END " + end);
 							}
-							else	
+							else	{
 								end = begin - BLOCK_SIZE;
+							}
 							pcksInFirst = (first.length - begin)/BLOCK_SIZE;
 							slide = true;
 						}
@@ -254,6 +274,7 @@ public class Client
 				System.out.println("Problems? offset = " + offset + " end = " + end + ", and ackSlide = " + ackSlide);
 				String zeros = Utils.AckToBinaryString(0, ackSlide);
 				ack = ack.substring(ackSlide) + zeros;
+				//System.out.println("packets in first = " + pcksInFirst);
 			}
 			
 			
@@ -276,8 +297,8 @@ public class Client
 						int index = i - pcksInFirst;
 						int pck_size = BLOCK_SIZE;
 						if((index*BLOCK_SIZE == end) && sec.length - end < BLOCK_SIZE && sec.length%BLOCK_SIZE != 0)	{		//TODO cheeeck
-							System.out.println("shorter packet!");
 							pck_size = sec.length%BLOCK_SIZE;
+							System.out.println("shorter packet! Size = " + pck_size);
 						}
 						//System.out.println("Debug... before arraycopy: index = " + index + "; pck_size = " + pck_size + "; end = " + end);
 						byte[] temp = new byte[pck_size]; 
@@ -402,11 +423,14 @@ public class Client
 		byte[] sendData = sendUTPpkt.getRawData();
 		DatagramPacket sndPkt = new DatagramPacket(sendData, sendData.length, channelAddr, channelPort);
 		//----DEBUG----
-		System.out.println("/n--DEBUG--/nLast sn in window is " + lastSnInWindow + "; SN is " + sn);
+		System.out.println("/n--DEBUG--/nLast sn in window is " + lastSnInWindow + "; SN is " + sn + "; size of payload is: " + sendUTPpkt.payl.length);
 		if(lastSnInWindow - sn < 0)
 			System.out.println("ERRORE!! CONTROLLARE L'AGGIORNAMENTO DI LASTSNINW.");
 		try {
 			System.out.println("------\nSending SN = " + sn + "\n------");
+			System.out.println("Payload: /n");
+			//String p = new String(temp, "UTF-8");
+			//System.out.println(p);
 			socket.send(sndPkt);
 		}
 		catch(IOException e) {
