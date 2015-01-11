@@ -23,7 +23,7 @@ public class Server {
 	// When the write buffer exceeds this number of bytes, it is written on the output file
 	private static final int WRITEBUF_THRESH = 20 * 1024;
 
-	private static final int WINDOW_TIMEOUT = 2000; //To stop waiting the pck of the window and send the ack
+	private static final int WINDOW_TIMEOUT = 1500; //To stop waiting the pck of the window and send the ack
 	static final int BLOCK_SIZE = 512;					//I don't know if I can put this information here
 
 	public static void main(String[] args) {
@@ -87,7 +87,8 @@ public class Server {
 		int window_size = 60;
 		byte[][] DataBuffer = new byte[window_size][BLOCK_SIZE];			//data buffer while receiving the window's packets 
 		boolean[] Ack = new boolean[window_size];
-		long startTransferTime = System.currentTimeMillis();				//
+		long startTransferTime = System.currentTimeMillis();
+		long startTime = System.currentTimeMillis();
 		boolean allTrue = true;
 		boolean allFalse = false;
 		int firstFalse = 0;
@@ -99,7 +100,7 @@ public class Server {
 		int countOld = 0;
 		long oldSn = 0;
 		boolean first = true;
-		long lastFinSn = 0;
+		int lastFinSn = 0;
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
@@ -301,16 +302,9 @@ public class Server {
 			sendUTPpkt.dstPort = (short) clientPort;
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 			sendUTPpkt.lastSnInWindow = (int) lastSnWind;
-			sendUTPpkt.payl = new byte[0];
-			if(snFIN != 0 && FirstFalse(Ack)== (snFINWind + 1))	{						
-				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
-				//gotFIN = true;
-			}
-			else
-			{
-				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
-				//gotFIN = false;
-				}
+			sendUTPpkt.payl = new byte[0];			
+			sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKDATA;
+				
 			
 			System.out.println("ACK ARRAY: " + Utils.AckToBinaryString(sendUTPpkt.sn, window_size));
 			System.out.println("----------------------------------------");
@@ -462,6 +456,10 @@ public class Server {
 		
 		}
 		System.out.println("Bye bye, Client! ;-)");
+		System.out.println("Transfer time: " + (System.currentTimeMillis() - startTime)/1000 + " s");
+		System.out.println("Transfered: " + ((n-1)*BLOCK_SIZE + FinLength)/1000 + "KBytes");
+		System.out.println("Mean transfer speed: " + (double)((n-1)*BLOCK_SIZE + FinLength)/(double)(System.currentTimeMillis() - startTime) + "Kbytes/s");
+		
 
 		// Write the remaining data in the buffer to the file
 				writeBufferToFile(writeBuffer, fileOutputStream);
@@ -477,12 +475,12 @@ public class Server {
 			finAck[j] = Ack[j - (lastSnWind - lastFinSn)];
 			
 		}
-		
+		*/
 		//create the last pkt
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.dstAddr = clientAddr;
 		sendUTPpkt.dstPort = (short) clientPort;
-		sendUTPpkt.sn = booleansToInt(finAck);			//WARNING: check this method with the client
+		sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
 		sendUTPpkt.lastSnInWindow = lastFinSn;
 		sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
 		sendUTPpkt.payl = new byte[0];
@@ -501,7 +499,7 @@ public class Server {
 			socket.close(); System.exit(-1);
 		}
 	
-	*/
+	
 
 
 		

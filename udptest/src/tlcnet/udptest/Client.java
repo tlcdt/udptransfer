@@ -13,7 +13,7 @@ public class Client
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
-	static final int WINDOW_SIZE = 63;
+	static final int WINDOW_SIZE = 60;
 
 
 
@@ -319,11 +319,11 @@ public class Client
 			boolean receivedSomething = false;
 			int recSn = 0;
 			//System.out.println("Il timer è a " + ack_start);
-			while(keepTrying && System.currentTimeMillis() - ack_start < 2000)	{
+			while(keepTrying && System.currentTimeMillis() - ack_start < 1500)	{
 				
 				byte[] recvBuf = new byte[RX_BUFSIZE];
 				DatagramPacket recvPkt = new DatagramPacket(recvBuf, recvBuf.length);
-				socket.setSoTimeout(ACK_TIMEOUT);
+				//socket.setSoTimeout(ACK_TIMEOUT);
 				try{
 					socket.receive(recvPkt);
 				}
