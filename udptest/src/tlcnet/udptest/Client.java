@@ -13,7 +13,7 @@ public class Client
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
-	static final int WINDOW_SIZE = 60;
+	static final int WINDOW_SIZE = 63;
 
 
 
@@ -338,8 +338,11 @@ public class Client
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
 				if(recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN)	{
-					recvUTPpkt.lastSnInWindow = (int) lastSnInWindow;
 					System.out.println("ACK_FIN!!!");
+					mustSend = false;
+					keepTrying = false;
+					System.out.println("********************/nEnd of transmission at SN " + lastSn + ". Transmission time was: " + (System.currentTimeMillis() - startTransferTime)/1000 + " seconds./n********************");
+					System.out.println("Bye Server...I always loved you T_T...take care until next transmission!/nForever yours, Client.");
 				}
 				
 				if ((recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA || recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN) && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
@@ -381,12 +384,6 @@ public class Client
 				String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
 				ack = ack.substring(0, WINDOW_SIZE - digits) + ones;
 			}
-
-			if(lastSn != 0 && ack.equals(Utils.AckToBinaryString((int) Math.pow(2, WINDOW_SIZE) - 1, WINDOW_SIZE)))	{		//It means that everything was acked
-				mustSend = false;
-				System.out.println("End of transmission at SN " + lastSn + ". Transmission time was: " + (System.currentTimeMillis() - startTransferTime)/1000 + " seconds.");
-			}
-			
 		}
 	}
 	
