@@ -13,7 +13,7 @@ public class Client
 	private static final int DEF_CHANNEL_PORT = 65432; // known by client and server
 	static final int DEF_CLIENT_PORT = 65431;
 	static final int BLOCK_SIZE = 512;
-	static final int WINDOW_SIZE = 10;
+	static final int WINDOW_SIZE = 60;
 
 
 
@@ -72,7 +72,7 @@ public class Client
 
 		
 		// ---- Initialization and useful variables ----
-		int sn = 1; 
+		long sn = 1; 
 		int begin = 0;	//begin always refears to array "first"; end is the index of the last byte of the window
 		int end = (WINDOW_SIZE - 1)*BLOCK_SIZE; //begin and end keep track of the frames we are sending
 		
@@ -84,8 +84,8 @@ public class Client
 		int segmentCounter = 1;							//To know how many "windows" we sent
 		int pcksInFirst = WINDOW_SIZE;					//How many pcks of the window are in the first byte array
 		boolean slide = false;							//Used when we have to shift the window
-		int lastSn = 0;									//It becomes != 0 when we reach the final packet
-		int lastSnInWindow = 0;
+		long lastSn = 0;									//It becomes != 0 when we reach the final packet
+		long lastSnInWindow = 0;
 		boolean resending = false;
 		boolean rep = false;
 		int ackSlide = 0;
@@ -134,12 +134,12 @@ public class Client
 				if(lastSn != 0 && pcksInFirstFixer)	{
 					if(pcksInFirst - (lastSnInWindow - lastSn) <= 0)	{
 						first = sec; 	//Points to sec array
-						begin = (lastSnInWindow - lastSn) - pcksInFirst;
+						begin = (int) (lastSnInWindow - lastSn) - pcksInFirst;
 						pcksInFirst = 10;			//Maximize
 					}
 					else	{
-						pcksInFirst = pcksInFirst - (lastSnInWindow - lastSn);
-					begin = begin + (lastSnInWindow - lastSn);
+						pcksInFirst = pcksInFirst - (int) (lastSnInWindow - lastSn);
+					begin = begin + (int) (lastSnInWindow - lastSn);
 					}
 					pcksInFirstFixer = false;
 				}
@@ -314,7 +314,7 @@ public class Client
 			
 			// ---- Receive ack ----
 			long ack_start = System.currentTimeMillis();
-			int countOnes = 0;
+			long countOnes = 0;
 			boolean keepTrying = true;
 			boolean receivedSomething = false;
 			int recSn = 0;
@@ -337,12 +337,17 @@ public class Client
 				}
 				byte[] recvData = Arrays.copyOf(recvPkt.getData(), recvPkt.getLength()); 	// Payload of recv UDP datagram
 				UTPpacket recvUTPpkt = new UTPpacket(recvData);								// Parse UDP payload
-				if (recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
+				if(recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN)	{
+					recvUTPpkt.lastSnInWindow = (int) lastSnInWindow;
+					System.out.println("ACK_FIN!!!");
+				}
+				
+				if ((recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA || recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN) && recvUTPpkt.lastSnInWindow == lastSnInWindow)	{
 					//System.out.println("Ok, the ack should be received now........");
 					if(!rep)	{			//this window hasn't already been sent
 						keepTrying = false;
 					}
-					else if(recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA && recvUTPpkt.sn > countOnes)	{		//The packet with the most acks wins
+					else if((recvUTPpkt.function == UTPpacket.FUNCT_ACKDATA || recvUTPpkt.function == UTPpacket.FUNCT_ACKFIN) && recvUTPpkt.sn > countOnes)	{		//The packet with the most acks wins
 						countOnes = recvUTPpkt.sn;
 						ack = Utils.AckToBinaryString(recvUTPpkt.sn, WINDOW_SIZE);				//Check it out in Utils class
 					}
@@ -372,7 +377,7 @@ public class Client
 			else
 				rep = false;
 			if(lastSn != 0 && lastSnInWindow != lastSn)	{
-				int digits = (lastSnInWindow - lastSn);
+				int digits = (int) (lastSnInWindow - lastSn);
 				String ones = Utils.AckToBinaryString((int) Math.pow(2, digits) - 1, digits);
 				ack = ack.substring(0, WINDOW_SIZE - digits) + ones;
 			}
@@ -408,13 +413,13 @@ public class Client
 		return array;
 	}
 	
-	static void send(int lastSnInWindow, int lastSn, int sn, byte[] temp, InetAddress dstAddr, int dstPort, InetAddress channelAddr, int channelPort, DatagramSocket socket, RandomAccessFile theFile) 
+	static void send(long lastSnInWindow, long lastSn, long sn, byte[] temp, InetAddress dstAddr, int dstPort, InetAddress channelAddr, int channelPort, DatagramSocket socket, RandomAccessFile theFile) 
 	throws IOException {		//Just the usual boring stuff
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.sn = sn;
 		sendUTPpkt.dstAddr = dstAddr;
 		sendUTPpkt.dstPort = (short)dstPort;
-		sendUTPpkt.lastSnInWindow = lastSnInWindow;	//This is just a reference for receiver
+		sendUTPpkt.lastSnInWindow = (int) lastSnInWindow;	//This is just a reference for receiver
 		if(sn == lastSn)		//NOTE: last packet carries data, but it has FIN as function field
 			sendUTPpkt.function = (byte) UTPpacket.FUNCT_FIN;
 		else

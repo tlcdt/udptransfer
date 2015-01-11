@@ -81,25 +81,25 @@ public class Server {
 		
 		boolean new_window = true; 		//I use that to calculate window_size
 		boolean notAllAcked = false;
-		int lastSnWind = 0;
-		int firstSnWind = 1;			//first sn in the current window
-		int SN = 1;						//is useless
-		int window_size = 20;
+		long lastSnWind = 0;
+		long firstSnWind = 1;			//first sn in the current window
+		long SN = 1;						//is useless
+		int window_size = 60;
 		byte[][] DataBuffer = new byte[window_size][BLOCK_SIZE];			//data buffer while receiving the window's packets 
 		boolean[] Ack = new boolean[window_size];
 		long startTransferTime = System.currentTimeMillis();				//
 		boolean allTrue = true;
 		boolean allFalse = false;
 		int firstFalse = 0;
-		int snFIN = 0;
-		int snFINWind = 0;
+		long snFIN = 0;
+		long snFINWind = 0;
 		int FinLength = 0;
 		byte[] FinPayl = new byte[BLOCK_SIZE];
 		int n = 0;
 		int countOld = 0;
-		int oldSn = 0;
+		long oldSn = 0;
 		boolean first = true;
-		int lastFinSn = 0;
+		long lastFinSn = 0;
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
@@ -189,8 +189,8 @@ public class Server {
 					oldAck[i] = true;
 				}
 				
-				for(int j = lastSnWind - oldSn; j < window_size; j++)	{
-					oldAck[j] = Ack[j - (lastSnWind - oldSn)];
+				for(int j = (int) (lastSnWind - oldSn); j < window_size; j++)	{
+					oldAck[j] = Ack[j - (int) (lastSnWind - oldSn)];
 					
 				}
 				
@@ -199,7 +199,7 @@ public class Server {
 				sendUTPpkt.dstAddr = clientAddr;
 				sendUTPpkt.dstPort = (short) clientPort;
 				sendUTPpkt.sn = booleansToInt(oldAck);			//WARNING: check this method with the client
-				sendUTPpkt.lastSnInWindow = oldSn;
+				sendUTPpkt.lastSnInWindow = (int) oldSn;
 				sendUTPpkt.payl = new byte[0];
 				
 				byte[] sendData = sendUTPpkt.getRawData();
@@ -259,7 +259,7 @@ public class Server {
 				
 				//copy data in the cell of the buffer array with the right index
 				if(recvUTPpkt.sn >= firstSnWind){
-				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[recvUTPpkt.sn - firstSnWind], 0 , recvUTPpkt.payl.length);
+				try{System.arraycopy(recvUTPpkt.payl, 0, DataBuffer[(int) (recvUTPpkt.sn - firstSnWind)], 0 , recvUTPpkt.payl.length);
 				}
 				catch (ArrayIndexOutOfBoundsException e)	{
 					System.err.println("recvUTPpkt.sn - firstSnWind: " + (recvUTPpkt.sn - firstSnWind));
@@ -268,7 +268,7 @@ public class Server {
 				}
 				
 				//put the 1 in the Ack array in the right position
-				Ack[recvUTPpkt.sn - firstSnWind] = true;
+				Ack[(int) (recvUTPpkt.sn - firstSnWind)] = true;
 				}
 				
 				else	{
@@ -300,7 +300,7 @@ public class Server {
 			sendUTPpkt.dstAddr = clientAddr;
 			sendUTPpkt.dstPort = (short) clientPort;
 			sendUTPpkt.sn = booleansToInt(Ack);			//WARNING: check this method with the client
-			sendUTPpkt.lastSnInWindow = lastSnWind;
+			sendUTPpkt.lastSnInWindow = (int) lastSnWind;
 			sendUTPpkt.payl = new byte[0];
 			if(snFIN != 0 && FirstFalse(Ack)== (snFINWind + 1))	{						
 				sendUTPpkt.function = (byte) UTPpacket.FUNCT_ACKFIN;
@@ -401,7 +401,7 @@ public class Server {
 			
 			firstFalse = FirstFalse(Ack);
 			
-			int last = firstFalse;
+			long last = firstFalse;
 			 
 			//TODO:Devo controllare che abbia ricevuto tutti i pacchetti fino a quello del fin
 			if(snFIN != 0 && areAllTrue2(Ack, snFINWind))
@@ -523,8 +523,8 @@ public class Server {
 	}
 
 	
-	private static int booleansToInt(boolean[] arr){
-	    int n = 0;
+	private static long booleansToInt(boolean[] arr){
+	    long n = 0;
 	    for (boolean b : arr)
 	        n = (n << 1) | (b ? 1 : 0);
 	    return n;
@@ -538,7 +538,7 @@ public class Server {
 	    return true;
 	}
 	
-	public static boolean areAllTrue2(boolean[] array, int pos)
+	public static boolean areAllTrue2(boolean[] array, long pos)
 	{	
 		
 	    for(int i = 0; i < pos; i++) if (!array[i]) return false;
