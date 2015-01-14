@@ -3,8 +3,6 @@ package tlcnet.udptest;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
-//FIXME These methods are bad: no input check!
-
 public class Utils {
 
 	public static int[] byteArr2intArr(byte[] in) {

@@ -27,8 +27,8 @@ public class Client
 	static final int DEF_CLIENT_CTRL_PORT = 65430;
 	
 	private static final int CORE_POOL_SIZE = 20;
-	private static final int EOB_PRE_SLEEP = 0;//15; attraverso router
-	private static final int EOB_PRE_DELAY = 100; // TODO In localhost, with parameters {640, 50, 20}, 100 is the best. Below this, throughput doesn't change, but more packets are transmitted. The problem is that with different parameters this may not be the best choice!
+	private static final int EOB_PRE_SLEEP = 0;
+	private static final int EOB_PRE_DELAY = 100;
 	private static final int EOB_INTER_DELAY = 30;
 	
 	// Each time we send an EOB, we send it NUM_OF_EOBS times. Those packets will have same SN and, if received, they'll be discarded by the server
@@ -49,7 +49,7 @@ public class Client
 	private static int[] numTransmissionsCache = new int[PKTS_IN_BLOCK];
 	private static int eob_preSleep = EOB_PRE_SLEEP;
 	
-	private static int pktCongstnThresh = PKTS_IN_BLOCK * 10; // TODO change this as congestion control!!
+	private static int pktCongstnThresh = PKTS_IN_BLOCK * 10; // congestion control
 	
 
 	
@@ -120,10 +120,10 @@ public class Client
 		byte[] txBuffer = new byte[BUFFER_SIZE];
 		
 		// A priori statistics
-		double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
+		/*double expectedLossProb = (1 - Math.exp(-(PKT_SIZE + UTPpacket.HEADER_LENGTH)/(double)1024));
 		double lossThresh = 0.4 * 1 + 0.6 * expectedLossProb;
 		Utils.logg("Expected loss probability is " + Math.round(expectedLossProb * 100) + "%");
-		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%\n");
+		Utils.logg("Loss threshold is " + Math.round(lossThresh * 100) + "%\n");*/
 		
 		
 		
@@ -172,7 +172,7 @@ public class Client
 
 				// Re-send EOB packets that have been awaiting ACK for too long
 				if (eobHandler.hasTimedOut(j)) {
-					Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
+					//Utils.logg("timeout: resending EOB " + bnInWindow(j, windowLeft));
 					// We get from the cache a copy of the current EOB without SN, to avoid the possibility that the server discards it
 					for (int k = 0; k < NUM_OF_EOBS; k++)
 						sendDatagram(ctrlSocket, eobAssembler.getFromCache(j));
@@ -235,10 +235,6 @@ public class Client
 			//Utils.logg(recvEobAck.endOfBlockAck.numberOfMissingSN + " pkts\t missing from BN=" + recvEobAck.endOfBlockAck.bn);
 			int numMissingPkts = recvEobAck.endOfBlockAck.numberOfMissingSN;	// Number of packets of this block that the server hasn't received yet
 			int ackedBn = recvEobAck.endOfBlockAck.bn;	// BN of the block this ACK is referred to
-			
-			// Lost too many packets? Something's wrong: let's increase the pause between the tx of blocks
-			/*if (numMissingPkts > PKTS_IN_BLOCK * lossThresh)
-				eob_preSleep = (int) Math.ceil(eob_preSleep * 1.1);*/
 			
 			// Index of this packet's block in the current window. If it's outside the window, ignore it.
 			int bnIndexInWindow = ackedBn - windowLeft;
@@ -305,8 +301,8 @@ public class Client
 		System.out.println("Elapsed time: " + elapsedTime + " s");
 		System.out.println("Transfer rate: " + new DecimalFormat("#0.00").format(transferRate) + " KB/s");
 		
-		Utils.logg("Now eob_preSleep is " + eob_preSleep + " ms");
-		Utils.logg("duplicate EOB handler misses = " + dupEobHandler.misses());
+		//Utils.logg("Now eob_preSleep is " + eob_preSleep + " ms");
+		//Utils.logg("duplicate EOB handler misses = " + dupEobHandler.misses());
 		schedExec.shutdownNow();
 	}
 
@@ -400,7 +396,7 @@ public class Client
 			// Updates toBeSent array to specify that there are no pending packets to be sent
 			Arrays.fill(toBeSent, PKTS_IN_BLOCK * i, PKTS_IN_BLOCK * (i + 1), false);
 			
-			Utils.logg("pending=" + eobTimers.getPending());
+			//Utils.logg("pending=" + eobTimers.getPending());
 		}		
 	}
 

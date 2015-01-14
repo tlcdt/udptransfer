@@ -22,14 +22,11 @@ public class Channel {
 		
 		int listenPort = DEF_CHANNEL_RCV_PORT;
 		
-		int toServer = 0;
-		
 		// --- Create listen and send sockets ---
 		DatagramSocket listenSocket = null;
 		DatagramSocket outSocket = null;
 		try {
 			listenSocket = new DatagramSocket(listenPort);
-			listenSocket.setSoTimeout(10000);
 		} catch(SocketException e) {
 			System.err.println("Error creating a socket bound to port " + listenPort);
 			System.exit(-1);
@@ -71,22 +68,11 @@ public class Channel {
 			// Parse the payload and get destination address and port
 			pktParser.setPayload(udpPayload);
 			InetAddress dstAddr = pktParser.getDstAddr();
-			int dstPort = pktParser.getDstPort();
-			
-			if(dstPort == Server.DEF_SERVER_PORT)
-				toServer++;
-			
-			// The following is compatible only with our format.
-			/*UTPpacket utpPkt = new UTPpacket(udpPayload);		// parse UDP payload
-			InetAddress dstAddr = utpPkt.dstAddr;			// get intended dest address and port
-			int dstPort = (int)utpPkt.dstPort & 0xffff;*/
-			
+			int dstPort = pktParser.getDstPort();			
 			
 			// Decide whether to drop the packet; if so, start listening again.
-			if (mustDrop(udpPayload.length)) {
-				//Utils.logg("Dropping packet SN=" + utpPkt.sn + " towards " + dstAddr.getHostAddress());
+			if (mustDrop(udpPayload.length))
 				continue;
-			}
 			
 			// Create the UDP datagram to be sent
 			DatagramPacket sendPkt = new DatagramPacket(udpPayload, udpPayload.length, dstAddr, dstPort);
@@ -95,21 +81,10 @@ public class Channel {
 			long rndDelay = getRndDelay(udpPayload.length);
 			schedExec.schedule(new AsyncRepeatedPacketSender(outSocket, sendPkt), rndDelay, TimeUnit.MILLISECONDS);
 			
-			// AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
-			// was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
-			// the packet itself, together with the output socket.
-			
-			
-			//DEBUG
-//			if (dstPort == Client.DEF_CLIENT_PORT)
-//				Utils.logg("  <--  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
-//			else if (dstPort == Server.DEF_SERVER_PORT)
-//				Utils.logg("  -->  Header: " + Utils.byteArr2str(Arrays.copyOf(udpPayload, UTPpacket.HEADER_LENGTH)));
+			/*  AsyncRepeatedPacketSender is a runnable class that is called by the ScheduledThreadPoolExecutor, after the delay that
+			 *  was assigned to the current packet. In order to perform the task of sending the packet, this class needs to be passed
+			 *  the packet itself, together with the output socket. */
 		}
-		
-		
-		Utils.logg("Packets to server: " + toServer);
-		schedExec.shutdownNow();
 	}
 
 

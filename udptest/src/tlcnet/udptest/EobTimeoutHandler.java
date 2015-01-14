@@ -61,7 +61,7 @@ public class EobTimeoutHandler {
 	}
 	
 	/**
-	 * Restarts all timers as specified by restartTimer();
+	 * Restarts all timers as specified by restartTimer()
 	 */
 	public void restartTimers() {
 		for(int i = 0; i < windowSize; i++)
@@ -80,7 +80,7 @@ public class EobTimeoutHandler {
 
 	
 	/**
-	 * Returns the number of active timers. Even if timedout, a timer is still
+	 * Returns the number of active timers. Even if timed-out, a timer is still
 	 * active if it's not deactivated.
 	 * @return the number of active timers.
 	 */
@@ -158,7 +158,7 @@ public class EobTimeoutHandler {
 	/**
 	 * Returns the number of pending packets of all blocks (the active ones, i.e. the
 	 * ones that have an active timer)
-	 * @return
+	 * @return the number of pending packets of all blocks
 	 */
 	public int getPending() {
 		int pending = 0;

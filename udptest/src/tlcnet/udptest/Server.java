@@ -10,7 +10,6 @@ import java.net.UnknownHostException;
 import java.text.DecimalFormat;
 import java.util.Arrays;
 
-// TODO: What if the Server starts listening after the Client has started transmitting?
 
 
 public class Server {
@@ -24,7 +23,7 @@ public class Server {
 	
 	static final int PKT_SIZE = Client.PKT_SIZE;
 	static final int PKTS_IN_BLOCK = Client.PKTS_IN_BLOCK;
-	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER; //TODO update these during transmission?
+	static final int BLOCKS_IN_BUFFER = Client.BLOCKS_IN_BUFFER;
 	
 	static final int BYTES_IN_BLOCK = PKTS_IN_BLOCK * PKT_SIZE;
 	static final int PKTS_IN_BUFFER = PKTS_IN_BLOCK * BLOCKS_IN_BUFFER;
@@ -158,7 +157,7 @@ public class Server {
 						lastSN = recvUTPpkt.sn;
 						lastBN = bn;
 						sizeOfLastPkt = recvUTPpkt.payl.length;
-						Utils.logg("Last packet is SN=" + lastSN + " with size " + sizeOfLastPkt);
+						//Utils.logg("Last packet is SN=" + lastSN + " with size " + sizeOfLastPkt);
 					}
 					// Two different final packets: this should never happen!
 					else if (sizeOfLastPkt != INVALID && lastSN != INVALID && (sizeOfLastPkt != recvUTPpkt.payl.length || lastSN != recvUTPpkt.sn)) {
@@ -207,22 +206,22 @@ public class Server {
 			case UTPpacket.FUNCT_EOB:
 			{
 				// -- Fill in the array with missing SNs
-				if (!dupEobHandler.isNew(recvUTPpkt.sn)) continue; // TODO This seems to half the throughput. Maybe we should send even more ACKs instead?
+				if (!dupEobHandler.isNew(recvUTPpkt.sn))
+					continue;
 				int[] missingSN = getMissingSN(receivedPkts, recvUTPpkt, windowLeft, windowRight);
 				int bn = recvUTPpkt.endOfBlock.bn;
 				if (missingSN == null) {
 					if (bn > windowRight || (lastBN != INVALID && bn > lastBN))
 						break;
-					if (bn < windowLeft) { // this condition shouldn't be necessary if we implement a simple linear window
+					if (bn < windowLeft) { // this condition shouldn't be necessary since we implemented a simple linear window
 						// Send ACK for old EOB
-						//Utils.logg("Sending ACK for old BN=" + bn);
 						UTPpacket eobAckPkt = assembleEobAckPacket(bn, new int[0]);
 						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
 						sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort); // try harder: the client won't even respond to this
 						break;
 					}
 				}
-				else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
+				//else Utils.logg(missingSN.length + "pkt\t missing from BN=" + bn);
 
 				// Index of this packet's block in the current window
 				int bnIndexInWindow = bn - windowLeft;
@@ -232,8 +231,7 @@ public class Server {
 				
 				
 				// -- Assemble and send EOB_ACK
-
-				int numOfEobAckTx = 8;//missingSN.length / 50 + 3;
+				int numOfEobAckTx = 6;
 				UTPpacket eobAckPkt = assembleEobAckPacket(bn, missingSN);
 				for (int k = 0; k < numOfEobAckTx; k++)
 					sendUtpPkt(eobAckPkt, socket, channelAddr, channelPort);
@@ -249,7 +247,7 @@ public class Server {
 				
 				
 				while (canShift) {
-					Utils.logg("windowLeft=" + windowLeft + "  -  now shifting by 1");
+					//Utils.logg("windowLeft=" + windowLeft + "  -  now shifting by 1");
 					
 					// Before shifting we need to know how many bytes we must write. Full block? Or is this the
 					// last block? We get this info from the size of the buffer alone.
@@ -257,7 +255,6 @@ public class Server {
 					// Write on file the proper amount of bytes (the first block in the buffer)
 					int bytesInThisBlock = Math.min(BYTES_IN_BLOCK, bufferedBytes);
 					outStream.write(rxBuffer, 0, bytesInThisBlock);
-					//if(bytesInThisBlock != BYTES_IN_BLOCK) Utils.logg("The buffer has only " + bufferedBytes + " bytes left: last block");
 
 					// Counters
 					bytesWritten += bytesInThisBlock;
@@ -300,9 +297,8 @@ public class Server {
 		finPacket.dstAddr = clientAddr;
 		finPacket.dstPort = (short) clientPort;
 		finPacket.function = UTPpacket.FUNCT_FIN;
-		for (int i = 0; i < NUMBER_OF_FIN; i++) {
+		for (int i = 0; i < NUMBER_OF_FIN; i++)
 			sendUtpPkt(finPacket, socket, channelAddr, channelPort);
-		}
 
 
 		Utils.logg(receivedPackets + " packets in the file, while " + (receivedPackets + duplicateCounter) + " data packets were received");

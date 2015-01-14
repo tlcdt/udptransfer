@@ -7,9 +7,9 @@ import java.util.Arrays;
 public class ChannelGenericPacketParser {	
 	private static final int INVALID_PORT  = 0;
 	
-	static final int DSTADDR_START  = 0;  // 4
+	static final int DSTADDR_START  = 0;  // 4 bytes
 	static final int DSTADDR_END    = 3;
-	static final int DSTPORT_START  = 4;  // 2
+	static final int DSTPORT_START  = 4;  // 2 bytes
 	static final int DSTPORT_END    = 5;
 	
 	private InetAddress dstAddr = null;
@@ -71,6 +71,4 @@ public class ChannelGenericPacketParser {
 	public int getDstPort() {
 		return (int) dstPort & 0xffff;
 	}
-	
-	
 }

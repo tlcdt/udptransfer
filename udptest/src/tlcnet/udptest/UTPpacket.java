@@ -15,13 +15,13 @@ public class UTPpacket {
 	static final int FUNCT_EOB = 5;	// endofblock
 	static final int FUNCT_EOB_ACK = 6;
 	
-	static final int DSTADDR_START  = 0;  // 4
+	static final int DSTADDR_START  = 0;  // 4 bytes
 	static final int DSTADDR_END    = 3;
-	static final int DSTPORT_START  = 4;  // 2
+	static final int DSTPORT_START  = 4;  // 2 bytes
 	static final int DSTPORT_END    = 5;
-	static final int FUNCT_START   = 6; // 1
+	static final int FUNCT_START   = 6; // 1 bytes
 	static final int FUNCT_END     = 6;
-	static final int SN_START      = 7; // 3
+	static final int SN_START      = 7; // 3 bytes
 	static final int SN_END        = 9;
 	static final int PAYL_START    = 10;
 	static final int HEADER_LENGTH = 10;
@@ -231,7 +231,7 @@ public class UTPpacket {
 		private EndOfBlockAck(byte[] payl) {
 			super();
 			bn = Utils.bytes2int(Arrays.copyOfRange(payl, BN_START, BN_END + 1));
-			numberOfMissingSN = (payl.length - MISSING_SN_START) / SN_LENGTH; //TODO handle errors?
+			numberOfMissingSN = (payl.length - MISSING_SN_START) / SN_LENGTH;
 			missingSN = new int[numberOfMissingSN];
 			for (int i = 0; i < numberOfMissingSN; i++)
 				missingSN[i] = Utils.bytes2int(Arrays.copyOfRange
@@ -248,5 +248,4 @@ public class UTPpacket {
 			System.arraycopy(bnBytes, 0, payl, BN_START, bnBytes.length);
 		}
 	}
-
 }
