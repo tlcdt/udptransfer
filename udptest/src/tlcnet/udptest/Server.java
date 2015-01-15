@@ -23,7 +23,7 @@ public class Server {
 	// When the write buffer exceeds this number of bytes, it is written on the output file
 	private static final int WRITEBUF_THRESH = 20 * 1024;
 
-	private static final int WINDOW_TIMEOUT = 1500; //To stop waiting the pck of the window and send the ack
+	private static final int WINDOW_TIMEOUT = 1000; //To stop waiting the pck of the window and send the ack
 	static final int BLOCK_SIZE = 512;					//I don't know if I can put this information here
 
 	public static void main(String[] args) {
@@ -86,27 +86,29 @@ public class Server {
 		long SN = 1;						//is useless
 		int window_size = 60;
 		byte[][] DataBuffer = new byte[window_size][BLOCK_SIZE];			//data buffer while receiving the window's packets 
-		boolean[] Ack = new boolean[window_size];
+		boolean[] Ack = new boolean[window_size];						//the ACK of the current window
 		long startTransferTime = System.currentTimeMillis();
 		long startTime = System.currentTimeMillis();
 		boolean allTrue = true;
 		boolean allFalse = false;
 		int firstFalse = 0;
-		long snFIN = 0;
-		long snFINWind = 0;
-		int FinLength = 0;
-		byte[] FinPayl = new byte[BLOCK_SIZE];
+		long snFIN = 0;												//SN of the FIN pkt
+		long snFINWind = 0;											
+		int FinLength = 0;											//Length of the payload of the FIN pkt
+		byte[] FinPayl = new byte[BLOCK_SIZE];						//Payload of the FIN pkt
 		int n = 0;
 		int countOld = 0;
 		long oldSn = 0;
 		boolean first = true;
-		int lastFinSn = 0;
+		int lastFinSn = 0;											
 		
 		boolean gotFIN = false; //Needed to stop the cycle
 		while(!gotFIN)
 		{
 			
 			startTransferTime = System.currentTimeMillis();	
+			
+			//------Windoe cycle
 			
 			boolean WINFIN = false;	//Needed to stop the cycle
 			while(!WINFIN && (System.currentTimeMillis() - startTransferTime) < (long)WINDOW_TIMEOUT)	{
@@ -139,13 +141,14 @@ public class Server {
 			
 
 			//--------Only the first packet of the window------- 
+			
 			if(new_window)	{
 				
-				//window_size = recvUTPpkt.lastSnInWindow - lastSnWind; //get the current window size
-				firstSnWind = lastSnWind + 1;						
-				lastSnWind = recvUTPpkt.lastSnInWindow;
+				
+				firstSnWind = lastSnWind + 1;						//calculate the first SN of the new window
+				lastSnWind = recvUTPpkt.lastSnInWindow;				//last SN of the new window
 				startTransferTime = System.currentTimeMillis();			//start the timer
-				DataBuffer = new byte [window_size][BLOCK_SIZE];
+				DataBuffer = new byte [window_size][BLOCK_SIZE];   
 				Ack = new boolean[window_size];
 				countOld = 0;
 				
@@ -157,19 +160,19 @@ public class Server {
 			else if(notAllAcked){
 					
 				
-				//window_size = recvUTPpkt.lastSnInWindow - (firstSnWind + firstFalse - 1); //get the current window size
-				firstSnWind = firstSnWind + firstFalse;							
-				lastSnWind = firstSnWind + window_size - 1;
+				
+				firstSnWind = firstSnWind + firstFalse;				//calculate the first SN of the new window			
+				lastSnWind = firstSnWind + window_size - 1;			//last SN of the new window
 				startTransferTime = System.currentTimeMillis();			//start the timer
-				DataBuffer = Translation(DataBuffer, firstFalse, window_size, BLOCK_SIZE);//translate the buffer
+				DataBuffer = Translation(DataBuffer, firstFalse, window_size, BLOCK_SIZE);//translate the buffer of the previous window
 				Ack  = Translation(Ack, firstFalse, window_size);
 				new_window = false;
 				notAllAcked = false;
 				countOld = 0;
 				
 				
-				if (snFIN != 0)	{
-					snFINWind = snFIN- firstSnWind;
+				if (snFIN != 0)	{               //if the FIN is just arrived, update some indices
+					snFINWind = snFIN- firstSnWind; 
 					lastFinSn = recvUTPpkt.lastSnInWindow;
 				}
 				
@@ -177,6 +180,8 @@ public class Server {
 			
 			}
 			
+			
+			//-----if received some pkt of previous windows, send again the ack ralated to that window----
 			if (recvUTPpkt.lastSnInWindow < lastSnWind){
 				countOld++;
 				oldSn = recvUTPpkt.lastSnInWindow;
@@ -199,7 +204,7 @@ public class Server {
 				UTPpacket sendUTPpkt = new UTPpacket();
 				sendUTPpkt.dstAddr = clientAddr;
 				sendUTPpkt.dstPort = (short) clientPort;
-				sendUTPpkt.sn = booleansToInt(oldAck);			//WARNING: check this method with the client
+				sendUTPpkt.sn = booleansToInt(oldAck);			
 				sendUTPpkt.lastSnInWindow = (int) oldSn;
 				sendUTPpkt.payl = new byte[0];
 				
@@ -222,9 +227,10 @@ public class Server {
 				System.out.println("");
 			}
 			
+			//---------------------------------------------------------------------------------------
+			//---------------------Received the FIN packet -> set some variable--------------------
 			
-			
-			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN && first)	{		//received the FIN packet
+			if(recvUTPpkt.function == (byte) UTPpacket.FUNCT_FIN && first)	{		
 				//gotFIN = true;
 				snFIN = recvUTPpkt.sn;
 				snFINWind = snFIN - firstSnWind;
@@ -294,7 +300,7 @@ public class Server {
 			allFalse = areAllFalse(Ack);
 			firstFalse = 0;
 			
-			//------ACK packet------
+			//------Prepare the ACK packet------
 			
 			
 			UTPpacket sendUTPpkt = new UTPpacket();
@@ -328,7 +334,7 @@ public class Server {
 				}
 				
 	
-				
+				//-----------write the data in the file buffer-----------------------
 			for(int i = 0; i < last ; i++)	{
 				try	{
 					writeBuffer.write(DataBuffer[i]);
@@ -352,6 +358,7 @@ public class Server {
 
 
 			}
+			//---------the FIN payload is shorter, then I've to manage that in a different manner---------
 			if (snFIN != 0)	{				
 				//try	{
 					writeBuffer.write(FinPayl, 0, FinLength);
@@ -397,10 +404,11 @@ public class Server {
 			
 			long last = firstFalse;
 			 
-			//TODO:Devo controllare che abbia ricevuto tutti i pacchetti fino a quello del fin
+			
 			if(snFIN != 0 && areAllTrue2(Ack, snFINWind))
 				last = snFINWind;
 			
+			//write the first part of the received data in the file buffer
 			for(int i = 0; i < last ; i++)	{
 				try	{
 					writeBuffer.write(DataBuffer[i]);
@@ -451,7 +459,7 @@ public class Server {
 		
 			notAllAcked = true;
 			
-		}//----------------- here finishes allFalse--------------
+		}//----------------- here finishes !allFalse--------------
 		
 		
 		}
@@ -463,20 +471,8 @@ public class Server {
 
 		// Write the remaining data in the buffer to the file
 				writeBufferToFile(writeBuffer, fileOutputStream);
-		/*
-		boolean[] finAck = new boolean[window_size];
 		
-		//--------------create finAck-------------
-		for(int i = 0; i < (lastSnWind - lastFinSn); i++)	{
-			finAck[i] = true;
-		}
-		
-		for(int j = lastSnWind - lastFinSn; j < window_size; j++)	{
-			finAck[j] = Ack[j - (lastSnWind - lastFinSn)];
-			
-		}
-		*/
-		//create the last pkt
+		//create the FINACK pkt
 		UTPpacket sendUTPpkt = new UTPpacket();
 		sendUTPpkt.dstAddr = clientAddr;
 		sendUTPpkt.dstPort = (short) clientPort;
